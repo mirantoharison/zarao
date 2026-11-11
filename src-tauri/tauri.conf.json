@@ -4,9 +4,9 @@
   "version": "2.0.0",
   "identifier": "mg.zarao.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run bundle-node && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run bundle-node && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -42,7 +42,8 @@
     ],
     "resources": {
       "../server/": "server/",
-      "resources/ffmpeg/": "ffmpeg/"
+      "resources/ffmpeg/": "ffmpeg/",
+      "resources/node/": "node/"
     }
   }
 }

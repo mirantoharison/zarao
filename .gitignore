@@ -28,3 +28,6 @@ server/node_modules
 # ffmpeg minimal embarqué (produit par tools/ffmpeg-minimal/build.sh)
 src-tauri/resources/ffmpeg/*
 !src-tauri/resources/ffmpeg/LISEZMOI.txt
+
+# Node embarqué : copié par tools/bundle-node.mjs (binaire de ~80 Mo, jamais versionné)
+src-tauri/resources/node/
