@@ -1,0 +1,2 @@
+Dossier rempli par tools/ffmpeg-minimal/build.sh (ffmpeg.exe, BUILD-INFO.txt, COPYING.LGPLv2.1).
+Embarqué dans l'application ; absent = le serveur utilise le ffmpeg des Paramètres ou du PATH.
