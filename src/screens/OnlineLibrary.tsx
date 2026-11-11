@@ -1,3 +1,4 @@
+import { VideoStage, toggleVideoFullscreen } from "@/components/VideoStage";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
@@ -248,7 +249,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
       if (e.code === "Space") { e.preventDefault(); p.togglePlay(); }
       else if (e.key === "n") p.next();
       else if (e.key === "l") setLyricsOpen((o) => !o);
-      else if (e.key === "f" && p.current) { if (p.current.kind === "video") void p.mediaRef.current?.requestFullscreen?.(); else setVisualizerOpen(true); }
+      else if (e.key === "f" && p.current) { if (p.current.kind === "video") toggleVideoFullscreen(); else setVisualizerOpen(true); }
       else if (e.key === "p") p.previous();
       else if (e.key === "ArrowLeft") { e.preventDefault(); p.seek(Math.max(0, p.time - SEEK_STEP)); }
       else if (e.key === "ArrowRight") { e.preventDefault(); p.seek(Math.min(p.duration || 0, p.time + SEEK_STEP)); }
@@ -467,9 +468,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
         </ScrollArea>
 
         {/* IMPORTANT : l'élément média reste toujours monté, sinon changer de piste coupe la lecture. */}
-        <section className={cn("relative bg-black", isVideo ? "flex-1" : "hidden")}>
-          <video ref={p.mediaRef} className="size-full object-contain" onDoubleClick={() => void p.mediaRef.current?.requestFullscreen?.()} />
-        </section>
+        <VideoStage p={p} visible={isVideo} lyrics={lyrics.lyrics} />
 
         {/* Paroles : volet latéral, synchronisé avec la lecture */}
         {lyricsOpen && (

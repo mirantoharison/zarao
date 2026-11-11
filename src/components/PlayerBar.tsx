@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { MessageSquare, ThumbsDown, ThumbsUp, MicVocal, Copy, FastForward, FolderSearch, Gauge, Heart, Keyboard, Maximize, Moon, Music, Pause, PictureInPicture2, Play, Repeat, Repeat1, Rewind, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from "lucide-react";
 import { RainbowRing } from "@/components/RainbowRing";
+import { toggleVideoFullscreen } from "@/components/VideoStage";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import type { usePlayer } from "@/hooks/usePlayer";
@@ -45,7 +46,7 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
     if (currentIndex < 0) return 0;
     return Math.max(0, p.duration - p.time) + p.items.slice(currentIndex + 1).reduce((s, i) => s + i.duration, 0);
   }, [p.items, currentIndex, p.duration, p.time]);
-  const fullscreen = () => void p.mediaRef.current?.requestFullscreen?.();
+  const fullscreen = toggleVideoFullscreen;
   // Spectre : chemin disque en local, URL du média en ligne (cf. spectrum.ts).
   const spectrumSource = spectrumSourceOf(p.current);
 

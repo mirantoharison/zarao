@@ -1,3 +1,4 @@
+import { VideoStage, toggleVideoFullscreen } from "@/components/VideoStage";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -216,7 +217,7 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
     if (saved.path && saved.path !== oldPath) setFavorites((f) => { if (!f.has(oldPath)) return f; const n = new Set(f); n.delete(oldPath); n.add(saved.path as string); return n; });
   };
   const removeSelected = () => { p.removeItems([...selected]); setSelected(new Set()); };
-  const fullscreen = () => void p.mediaRef.current?.requestFullscreen?.();
+  const fullscreen = toggleVideoFullscreen;
   /** Vidéo : plein écran natif ; audio : visualiseur. */
   const openFullscreen = () => { if (!p.current) return; if (p.current.kind === "video") fullscreen(); else setVisualizerOpen(true); };
   const toggleFavorite = (path: string) => setFavorites((f) => { const n = new Set(f); n.has(path) ? n.delete(path) : n.add(path); return n; });
@@ -489,9 +490,7 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         </section>
 
         {/* IMPORTANT : l'élément média reste toujours monté, sinon changer de piste coupe la lecture. */}
-        <section className={cn("relative bg-black", isVideo ? "flex-1" : "hidden")}>
-          <video ref={p.mediaRef} className="size-full object-contain" onDoubleClick={fullscreen} />
-        </section>
+        <VideoStage p={p} visible={isVideo} lyrics={lyrics.lyrics} />
 
         {!isVideo && layout === "scene" && <SceneStage p={p} lyrics={lyrics.lyrics} onOpenLyrics={() => setLyricsOpen(true)} onFullscreen={openFullscreen} />}
         {!isVideo && layout === "strip" && (
