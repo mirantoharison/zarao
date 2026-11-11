@@ -19,6 +19,16 @@ fn server_entry(app: &tauri::AppHandle) -> Option<PathBuf> {
         .filter(|p| p.exists())
 }
 
+/// Node embarqué (resources/node, copié par tools/bundle-node.mjs). Absent = on retombe sur le `node` du PATH.
+fn bundled_node(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("node").join(name);
+    if dev.exists() {
+        return Some(dev);
+    }
+    app.path().resource_dir().ok().map(|d| d.join("node").join(name)).filter(|p| p.exists())
+}
+
 /// ffmpeg minimal embarqué (resources/ffmpeg). Absent = on laisse le serveur retomber sur les Paramètres ou le PATH.
 fn bundled_ffmpeg(app: &tauri::AppHandle) -> Option<PathBuf> {
     let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
@@ -40,7 +50,14 @@ pub fn run() {
             // de mode doit s'afficher quand même, le front gère l'état "serveur indisponible".
             match server_entry(app.handle()) {
                 Some(entry) => match {
-                    let mut cmd = Command::new("node");
+                    let node = bundled_node(app.handle()).unwrap_or_else(|| PathBuf::from("node"));
+                    let mut cmd = Command::new(node);
+                    // IMPORTANT : sans ce drapeau, node.exe ouvre une fenêtre de console visible à côté de l'application.
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                    }
                     cmd.arg(&entry);
                     // IMPORTANT : simple valeur par défaut. Un chemin saisi dans les Paramètres reste prioritaire côté serveur.
                     if let Some(ff) = bundled_ffmpeg(app.handle()) {
