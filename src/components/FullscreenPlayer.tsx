@@ -1,20 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { FullscreenChrome } from "@/components/FullscreenChrome";
-import { AudioVisualizer as Visualizer, type AudioVisualizerTheme as VisualizerTheme } from "@/components/AudioVisualizer";
+import { AudioVisualizer as Visualizer } from "@/components/AudioVisualizer";
+import { useVisualizerTheme } from "@/lib/visualizerTheme";
 import type { usePlayer } from "@/hooks/usePlayer";
 import type { Lyrics } from "@/lib/lyrics";
 import { useI18n } from "@/i18n";
 import { spectrumSourceOf } from "@/lib/media";
 
 type Props = { p: ReturnType<typeof usePlayer>; open: boolean; onClose: () => void; lyrics: Lyrics | null };
-
-const THEME_KEY = "zarao.visualizer.theme.v2";
-
-const THEMES: VisualizerTheme[] = ["zarao", "classic", "rainbow"];
-/** Thème par défaut : « zarao ». Une valeur mémorisée inconnue (ancienne version) y retombe aussi. */
-function readTheme(): VisualizerTheme {
-  try { const v = localStorage.getItem(THEME_KEY) as VisualizerTheme; return THEMES.includes(v) ? v : "zarao"; } catch { return "zarao"; }
-}
 
 /**
  * Plein écran audio : fond (pochette floutée) + visualiseur, habillés par `FullscreenChrome`, le même que celui de la vidéo.
@@ -24,7 +17,7 @@ export function FullscreenPlayer({ p, open, onClose, lyrics }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  const [theme, setTheme] = useState<VisualizerTheme>(readTheme);
+  const [theme, cycleTheme] = useVisualizerTheme();
   const [analysis, setAnalysis] = useState(true);
 
   // Ouverture : plein écran du navigateur sur la couche (fermée avec Échap, ce qui déclenche fullscreenchange).
@@ -47,7 +40,7 @@ export function FullscreenPlayer({ p, open, onClose, lyrics }: Props) {
   if (!open) return null;
 
   const cur = p.current;
-  const toggleTheme = () => setTheme((v) => { const n = THEMES[(THEMES.indexOf(v) + 1) % THEMES.length]; try { localStorage.setItem(THEME_KEY, n); } catch { /* non bloquant */ } return n; });
+  const toggleTheme = cycleTheme;
 
   return (
     <div ref={rootRef} className="fixed inset-0 z-[70] select-none overflow-hidden bg-neutral-950 text-white">

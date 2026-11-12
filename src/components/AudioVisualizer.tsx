@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { paletteTone } from "@/lib/palette";
 import { ANALYSIS_RATE, loadPcm, spectrumAt } from "@/lib/spectrum";
 
 export type AudioVisualizerTheme = "zarao" | "classic" | "rainbow";
@@ -28,7 +29,9 @@ const COVER_CACHE_PX = 512;
 /** Teinte de base du thème « classique » (bleu de l'app). */
 const CLASSIC_HUE = 212;
 /** Teinte « Zarao » : l'orange du casque du logo ; les barres glissent de l'ambre vers l'orangé selon leur position. */
-const ZARAO_HUE = 34;
+// Teinte/saturation du thème « zarao » : suivent la palette de l'app, rafraîchies à chaque image (cf. paletteTone).
+let ZARAO_HUE = 34;
+let ZARAO_SAT = 1;
 
 /**
  * Visualiseur plein écran moderne (canvas 2D, sans bibliothèque) :
@@ -48,6 +51,8 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
   const peaksRef = useRef(new Float32Array(BAR_COUNT));
   const rawRef = useRef(new Float32Array(BAR_COUNT));
   const bassRef = useRef(0);
+  const beatRef = useRef(0); // impulsion "heartbeat" : saute à 1 sur une attaque de basses, retombe vite
+  const bassAvgRef = useRef(0); // moyenne lente des basses, sert de seuil de détection
   const angleRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   // Redessin forcé : pochette, spectre ou taille qui arrivent pendant la pause doivent apparaître.
@@ -125,7 +130,7 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
     /** Couleur d'une barre : arc-en-ciel (`shift` = teinte en degrés, déjà calculée selon la position sur le cercle), ou nuances de bleu selon l'intensité. */
     const tone = (t: number, level: number, shift: number) =>
       rainbow ? `hsl(${shift % 360} 90% ${55 + level * 15}%)`
-        : zarao ? `hsl(${ZARAO_HUE - 8 + t * 20} 95% ${50 + level * 28}%)`
+        : zarao ? `hsl(${ZARAO_HUE - 8 + t * 20} ${95 * ZARAO_SAT}% ${50 + level * 28}%)`
         : `hsl(${CLASSIC_HUE - 12 + t * 24} 95% ${58 + level * 28}%)`;
     let raf = 0;
     let last = performance.now();
@@ -141,6 +146,7 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
       const live = playing && !!pcm;
 
       // --- Données : spectre lissé (attaque rapide, relâchement lent) et crêtes qui retombent ---
+      { const z = paletteTone(); ZARAO_HUE = z.hue; ZARAO_SAT = z.sat; }
       const levels = levelsRef.current, peaks = peaksRef.current, raw = rawRef.current;
       if (live) spectrumAt(pcm, time, raw); else raw.fill(0);
       let bass = 0;
@@ -152,6 +158,13 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
       bass /= BASS_BARS;
       bassRef.current += (bass - bassRef.current) * (bass > bassRef.current ? 0.3 : 0.07);
       const amp = bassRef.current;
+      // Détection de battement : les basses instantanées dépassent nettement leur moyenne lente (front montant).
+      // IMPORTANT : seuil relatif + plancher absolu, sinon le bruit de fond déclenche des battements en continu.
+      const prevAvg = bassAvgRef.current;
+      bassAvgRef.current += (bass - prevAvg) * 0.04;
+      if (live && bass > prevAvg * 1.25 + 0.04 && beatRef.current < 0.5) beatRef.current = 1;
+      beatRef.current = live ? Math.max(0, beatRef.current - 0.06 * dt) : 0;
+      const beat = beatRef.current;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
@@ -166,8 +179,9 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
       const glowR = ringR + maxBar * (0.6 + amp);
       const glow = ctx.createRadialGradient(0, 0, ringR * 0.8, 0, 0, glowR * 1.5);
       const glowHue = rainbow ? (now / 30) % 360 : zarao ? ZARAO_HUE : CLASSIC_HUE;
-      glow.addColorStop(0, `hsl(${glowHue} 95% 60% / ${0.12 + amp * 0.3})`);
-      glow.addColorStop(1, `hsl(${glowHue} 95% 60% / 0)`);
+      const glowSat = zarao ? 95 * ZARAO_SAT : 95;
+      glow.addColorStop(0, `hsl(${glowHue} ${glowSat}% 60% / ${0.12 + amp * 0.3})`);
+      glow.addColorStop(1, `hsl(${glowHue} ${glowSat}% 60% / 0)`);
       ctx.fillStyle = glow;
       ctx.beginPath();
       ctx.arc(0, 0, glowR * 1.5, 0, Math.PI * 2);
@@ -211,7 +225,7 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
       const start = Math.floor(time * ANALYSIS_RATE);
       const WAVE = 96;
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = rainbow ? `hsl(${(now / 20) % 360} 90% 70% / 0.85)` : zarao ? `hsl(${ZARAO_HUE + 2} 100% 78% / 0.85)` : `hsl(${CLASSIC_HUE} 95% 82% / 0.85)`;
+      ctx.strokeStyle = rainbow ? `hsl(${(now / 20) % 360} 90% 70% / 0.85)` : zarao ? `hsl(${ZARAO_HUE + 2} ${100 * ZARAO_SAT}% 78% / 0.85)` : `hsl(${CLASSIC_HUE} 95% 82% / 0.85)`;
       ctx.beginPath();
       for (let i = 0; i <= WAVE; i++) {
         const idx = start + Math.floor((i / WAVE) * 511);
@@ -224,26 +238,46 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
       ctx.closePath();
       ctx.stroke();
 
-      // --- Poussière lumineuse : dérive lente, un peu accélérée par les basses ---
+      // --- Poussière lumineuse : chaque bulle est rattachée au secteur de la couronne où elle se trouve ---
+      // et réagit au niveau de CETTE barre (mêmes angles que les barres : départ en bas, sens horaire).
+      // IMPORTANT : naissance pondérée par le spectre (les secteurs forts en émettent plus) ; le battement global
+      // (basses) ne fait qu'ajouter une salve par-dessus.
       const motes = motesRef.current;
-      if (live && !reduceMotion && motes.length < MAX_MOTES && Math.random() < 0.35 + amp) {
-        const a = Math.random() * Math.PI * 2;
-        const r0 = ringR + maxBar * 0.4 + Math.random() * maxBar;
-        const v = 0.15 + Math.random() * 0.35;
-        motes.push({ x: Math.cos(a) * r0, y: Math.sin(a) * r0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: 0.8 + Math.random() * 2, life: 1, hue: (a * 180) / Math.PI });
+      if (live && !reduceMotion) {
+        for (let n = 0; n < 10 && motes.length < MAX_MOTES; n++) {
+          const k = Math.floor(Math.random() * BAR_COUNT);
+          if (levels[k] < 0.08 || Math.random() > levels[k] * 0.9) continue;
+          const a = Math.PI / 2 + (k + Math.random()) * step;
+          const r0 = ringR + levels[k] * maxBar * (0.6 + Math.random() * 0.6);
+          const v = 0.15 + Math.random() * 0.35;
+          motes.push({ x: Math.cos(a) * r0, y: Math.sin(a) * r0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: 0.8 + Math.random() * 2, life: 1, hue: (k / BAR_COUNT) * 360 });
+        }
+        if (beat > 0.9) {
+          for (let n = 0; n < 8 && motes.length < MAX_MOTES; n++) {
+            const a = Math.random() * Math.PI * 2;
+            const r0 = ringR + maxBar * (0.4 + Math.random());
+            const v = 0.2 + Math.random() * 0.4;
+            motes.push({ x: Math.cos(a) * r0, y: Math.sin(a) * r0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: 0.8 + Math.random() * 2, life: 1, hue: (a * 180) / Math.PI });
+          }
+        }
       }
       for (let i = motes.length - 1; i >= 0; i--) {
         const m = motes[i];
+        // Secteur courant de la bulle -> niveau de la barre correspondante.
+        const ang = (Math.atan2(m.y, m.x) - Math.PI / 2 + Math.PI * 4) % (Math.PI * 2);
+        const e = levels[Math.min(BAR_COUNT - 1, Math.floor(ang / step))];
         if (playing) {
-          m.x += m.vx * (1 + amp * 2) * dt;
-          m.y += m.vy * (1 + amp * 2) * dt;
+          const push = 1 + e * 3 + amp + beat * 2;
+          m.x += m.vx * push * dt;
+          m.y += m.vy * push * dt;
           m.life -= 0.006 * dt;
         }
         if (m.life <= 0) { motes.splice(i, 1); continue; }
-        ctx.globalAlpha = Math.max(0, m.life) * 0.8;
-        ctx.fillStyle = rainbow ? `hsl(${(m.hue + now / 25) % 360} 90% 70%)` : zarao ? `hsl(${ZARAO_HUE} 95% 72%)` : `hsl(${CLASSIC_HUE} 90% 80%)`;
+        // La bulle gonfle et s'illumine avec son secteur de spectre (plancher d'opacité : visible même lointaine).
+        ctx.globalAlpha = Math.min(1, (Math.max(0, m.life) * 0.45 + 0.1) * (1 + e * 2.2 + beat));
+        ctx.fillStyle = rainbow ? `hsl(${(m.hue + now / 25) % 360} 90% 70%)` : zarao ? `hsl(${ZARAO_HUE} ${95 * ZARAO_SAT}% 72%)` : `hsl(${CLASSIC_HUE} 90% 80%)`;
         ctx.beginPath();
-        ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+        ctx.arc(m.x, m.y, m.r * (1 + e * 1.8 + beat * 0.8), 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { loadPcm, spectrumAt } from "@/lib/spectrum";
+import { ringBarColor, useVisualizerTheme } from "@/lib/visualizerTheme";
 
 type Props = {
   /** Élément <video> qui joue (audio ou vidéo). */
@@ -34,6 +35,10 @@ export function RainbowRing({ mediaRef, playing, trackId, path, innerRadius: inn
   // Le bouton (size-14 = 3,5 rem) suit l'échelle globale du root : on en dérive le rayon plutôt que de le figer en px.
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const innerRadius = innerRadiusProp ?? 1.75 * rem + 4;
+  // Même thème que le plein écran (partagé) ; lu via une ref car la boucle de dessin est créée une seule fois.
+  const [theme] = useVisualizerTheme();
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const levelsRef = useRef<Float32Array>(new Float32Array(BAR_COUNT));
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -138,7 +143,7 @@ export function RainbowRing({ mediaRef, playing, trackId, path, innerRadius: inn
         if (levels[i] < 0.02) continue;
         const len = 1.5 + levels[i] * MAX_BAR;
         const cos = Math.cos(angle), sin = Math.sin(angle);
-        g.strokeStyle = `hsl(${(i / BAR_COUNT) * 360}, 90%, ${55 + levels[i] * 15}%)`;
+        g.strokeStyle = ringBarColor(themeRef.current, i / BAR_COUNT, levels[i]);
         g.lineWidth = 2.6;
         g.lineCap = "round";
         g.beginPath();

@@ -4,6 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans: 'Outfit Variable', ui-sans-serif, system-ui, sans-serif;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -71,6 +72,140 @@
   --input: oklch(0.9 0.02 75 / 16%);
   --ring: oklch(0.74 0.16 60);
 }
+
+
+/* Palettes sélectionnables (Paramètres) ; « orange » = valeurs par défaut de .dark, « blanc » = :root clair. */
+html[data-palette="bordeaux"] {
+  --background: oklch(0.2 0.055 355);
+  --foreground: oklch(0.96 0.01 355);
+  --card: oklch(0.24 0.055 355);
+  --card-foreground: oklch(0.96 0.01 355);
+  --popover: oklch(0.25 0.055 355);
+  --popover-foreground: oklch(0.96 0.01 355);
+  --primary: oklch(0.72 0.2 355);
+  --primary-foreground: oklch(0.2 0.05 355);
+  --secondary: oklch(0.3 0.055 355);
+  --secondary-foreground: oklch(0.96 0.01 355);
+  --muted: oklch(0.3 0.055 355);
+  --muted-foreground: oklch(0.76 0.02 355);
+  --accent: oklch(0.3 0.055 355);
+  --accent-foreground: oklch(0.96 0.01 355);
+  --border: oklch(0.9 0.02 355 / 14%);
+  --input: oklch(0.9 0.02 355 / 18%);
+  --ring: oklch(0.72 0.2 355);
+}
+
+html[data-palette="violet"] {
+  --background: oklch(0.22 0.05 295);
+  --foreground: oklch(0.96 0.01 295);
+  --card: oklch(0.26 0.05 295);
+  --card-foreground: oklch(0.96 0.01 295);
+  --popover: oklch(0.27 0.05 295);
+  --popover-foreground: oklch(0.96 0.01 295);
+  --primary: oklch(0.75 0.15 295);
+  --primary-foreground: oklch(0.2 0.05 295);
+  --secondary: oklch(0.32 0.05 295);
+  --secondary-foreground: oklch(0.96 0.01 295);
+  --muted: oklch(0.32 0.05 295);
+  --muted-foreground: oklch(0.76 0.02 295);
+  --accent: oklch(0.32 0.05 295);
+  --accent-foreground: oklch(0.96 0.01 295);
+  --border: oklch(0.9 0.02 295 / 14%);
+  --input: oklch(0.9 0.02 295 / 18%);
+  --ring: oklch(0.75 0.15 295);
+}
+
+html[data-palette="ocean"] {
+  --background: oklch(0.23 0.04 235);
+  --foreground: oklch(0.96 0.01 235);
+  --card: oklch(0.27 0.04 235);
+  --card-foreground: oklch(0.96 0.01 235);
+  --popover: oklch(0.28 0.04 235);
+  --popover-foreground: oklch(0.96 0.01 235);
+  --primary: oklch(0.78 0.13 225);
+  --primary-foreground: oklch(0.2 0.04 235);
+  --secondary: oklch(0.33 0.04 235);
+  --secondary-foreground: oklch(0.96 0.01 235);
+  --muted: oklch(0.33 0.04 235);
+  --muted-foreground: oklch(0.76 0.02 235);
+  --accent: oklch(0.33 0.04 235);
+  --accent-foreground: oklch(0.96 0.01 235);
+  --border: oklch(0.9 0.02 235 / 14%);
+  --input: oklch(0.9 0.02 235 / 18%);
+  --ring: oklch(0.78 0.13 225);
+}
+
+html[data-palette="graphite"] {
+  --background: oklch(0.27 0.004 270);
+  --foreground: oklch(0.96 0.01 270);
+  --card: oklch(0.31 0.004 270);
+  --card-foreground: oklch(0.96 0.01 270);
+  --popover: oklch(0.32 0.004 270);
+  --popover-foreground: oklch(0.96 0.01 270);
+  --primary: oklch(0.88 0.005 270);
+  --primary-foreground: oklch(0.2 0.005 270);
+  --secondary: oklch(0.36 0.004 270);
+  --secondary-foreground: oklch(0.96 0.01 270);
+  --muted: oklch(0.36 0.004 270);
+  --muted-foreground: oklch(0.76 0.02 270);
+  --accent: oklch(0.36 0.004 270);
+  --accent-foreground: oklch(0.96 0.01 270);
+  --border: oklch(0.9 0.02 270 / 14%);
+  --input: oklch(0.9 0.02 270 / 18%);
+  --ring: oklch(0.88 0.005 270);
+}
+
+html[data-palette="noir"] {
+  --background: oklch(0.14 0 270);
+  --foreground: oklch(0.96 0.01 270);
+  --card: oklch(0.18 0 270);
+  --card-foreground: oklch(0.96 0.01 270);
+  --popover: oklch(0.19 0 270);
+  --popover-foreground: oklch(0.96 0.01 270);
+  --primary: oklch(0.98 0 0);
+  --primary-foreground: oklch(0.15 0 0);
+  --secondary: oklch(0.23 0 270);
+  --secondary-foreground: oklch(0.96 0.01 270);
+  --muted: oklch(0.23 0 270);
+  --muted-foreground: oklch(0.76 0.02 270);
+  --accent: oklch(0.23 0 270);
+  --accent-foreground: oklch(0.96 0.01 270);
+  --border: oklch(0.9 0.02 270 / 14%);
+  --input: oklch(0.9 0.02 270 / 18%);
+  --ring: oklch(0.98 0 0);
+}
+
+/* Palette « blanc » : le :root clair par défaut est trop pâle (bordures et fonds quasi invisibles) -> contrastes renforcés.
+   IMPORTANT : fond de page légèrement grisé et cartes blanches, pour que les surfaces se détachent les unes des autres. */
+html[data-palette="blanc"] {
+  --background: oklch(0.965 0.003 260);
+  --foreground: oklch(0.18 0.01 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.01 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.01 260);
+  --primary: oklch(0.22 0.01 260);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.86 0.006 260);
+  --secondary-foreground: oklch(0.2 0.01 260);
+  --muted: oklch(0.88 0.006 260);
+  --muted-foreground: oklch(0.45 0.01 260);
+  --accent: oklch(0.84 0.007 260);
+  --accent-foreground: oklch(0.2 0.01 260);
+  --border: oklch(0.77 0.007 260);
+  --input: oklch(0.74 0.007 260);
+  --ring: oklch(0.5 0.01 260);
+}
+
+/* Blanc : relief sur les surfaces (ombre douce) et fond ambiant très discret, sinon les taches grises salissent le fond clair. */
+html[data-palette="blanc"] [data-slot="card"],
+html[data-palette="blanc"] [data-slot="dialog-content"] { box-shadow: 0 1px 3px oklch(0 0 0 / 10%), 0 4px 14px oklch(0 0 0 / 6%); }
+/* IMPORTANT : beaucoup de surfaces utilisent un fond muted translucide (bg-muted/40…) qui disparaît sur fond clair :
+   on leur dessine un contour fin, et on adapte les liserés blancs prévus pour le sombre. */
+html[data-palette="blanc"] [class*="bg-muted"],
+html[data-palette="blanc"] [class*="bg-secondary"] { outline: 1px solid var(--border); outline-offset: -1px; }
+html[data-palette="blanc"] [class*="ring-white"] { --tw-ring-color: oklch(0 0 0 / 18%); }
+html[data-palette="blanc"] .ambient-blob { opacity: 0.07 !important; }
 
 @layer base {
   /* Échelle globale 65 % : tout le dimensionnement Tailwind est en rem, donc un seul réglage suffit. */
