@@ -10,8 +10,12 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  hideTrack = false,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & {
+  /** Piste totalement invisible (seul le curseur reste) : fait sans dépendre de la fusion des classes Tailwind. */
+  hideTrack?: boolean
+}) {
   const _values = React.useMemo(
     () =>
       Array.isArray(value)
@@ -37,9 +41,7 @@ function Slider({
     >
       <SliderPrimitive.Track
         data-slot="slider-track"
-        className={cn(
-          "relative grow overflow-hidden rounded-full bg-muted data-[orientation=horizontal]:h-1.5 data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5"
-        )}
+        className={cn("relative grow overflow-hidden rounded-full data-[orientation=horizontal]:h-1.5 data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5", hideTrack ? "bg-transparent" : "bg-muted")}
       >
         <SliderPrimitive.Range
           data-slot="slider-range"

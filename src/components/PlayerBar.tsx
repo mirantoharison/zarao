@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { MessageSquare, ThumbsDown, ThumbsUp, MicVocal, Copy, FastForward, FolderSearch, Gauge, Heart, Keyboard, Maximize, Moon, Music, Pause, PictureInPicture2, Play, Repeat, Repeat1, Rewind, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from "lucide-react";
+import { MessageSquare, ThumbsDown, ThumbsUp, MicVocal, Copy, FastForward, FolderSearch, Gauge, Heart, Keyboard, Maximize, Moon, Music, Pause, PictureInPicture2, Play, Repeat, Repeat1, Rewind, Shuffle, SlidersVertical, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from "lucide-react";
+import { useEqualizer } from "@/lib/equalizer";
 import { RainbowRing } from "@/components/RainbowRing";
 import { toggleVideoFullscreen } from "@/components/VideoStage";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,9 @@ import { cn } from "@/lib/utils";
 /** Pas des boutons reculer/avancer (10 s comme l'ancienne version). */
 export const SEEK_STEP = 10;
 
+/** Etat actif des boutons de la colonne droite : sans fond au repos, accent net (fond teinte + anneau) quand activé. */
+const ACTIVE_BTN = "bg-primary/20 text-primary ring-1 ring-primary/50 hover:bg-primary/25 hover:text-primary";
+
 type Props = {
   p: ReturnType<typeof usePlayer>;
   isFavorite: boolean;
@@ -24,6 +28,9 @@ type Props = {
   /** Ouvre le plein écran avec visualiseur (audio). Les vidéos passent par le plein écran natif. */
   onOpenVisualizer: () => void;
   lyricsOpen: boolean;
+  /** Volet de l'égaliseur (ouvert à gauche) et sa bascule. */
+  eqOpen: boolean;
+  onToggleEq: () => void;
   /** Mode en ligne seulement : j'aime / je n'aime pas du média en cours et accès aux commentaires. */
   social?: { data: Social | null; onReact: (kind: Reaction) => void; onOpenComments: () => void };
   onToggleLyrics: () => void;
@@ -33,9 +40,10 @@ type Props = {
  * Barre de lecture partagée entre le lecteur local et la bibliothèque en ligne :
  * infos de la piste, boutons de contrôle, progression, boucle A–B, minuterie, vitesse, volume.
  */
-export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, onShowShortcuts, onOpenVisualizer, lyricsOpen, onToggleLyrics, social }: Props) {
+export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, onShowShortcuts, onOpenVisualizer, lyricsOpen, onToggleLyrics, eqOpen, onToggleEq, social }: Props) {
   const { t } = useI18n();
   const [showRemaining, setShowRemaining] = useState(false);
+  const eq = useEqualizer();
   const RepeatIcon = p.repeat === "one" ? Repeat1 : Repeat;
   const isVideo = p.current?.kind === "video";
   const currentIndex = p.items.findIndex((i) => i.id === p.current?.id);
@@ -98,7 +106,7 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={() => p.seek(Math.max(0, p.time - SEEK_STEP))} disabled={!p.current} title={t("ctl.rewind", { s: SEEK_STEP })}><Rewind /></Button>
           <div className="relative mx-7 grid place-items-center">
             <RainbowRing mediaRef={p.mediaRef} playing={p.playing} trackId={p.current?.id} path={spectrumSource} />
-            <Button size="icon" className="relative z-10 size-14 rounded-full bg-white text-black hover:bg-white/90 [&_svg]:size-6" onClick={p.togglePlay} title={p.playing ? t("ctl.pause") : t("ctl.play")}>{p.playing ? <Pause /> : <Play />}</Button>
+            <Button size="icon" className="relative z-10 size-14 rounded-full bg-foreground text-background hover:bg-foreground/90 [&_svg]:size-6" onClick={p.togglePlay} title={p.playing ? t("ctl.pause") : t("ctl.play")}>{p.playing ? <Pause /> : <Play />}</Button>
           </div>
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={() => p.seek(Math.min(p.duration || 0, p.time + SEEK_STEP))} disabled={!p.current} title={t("ctl.forward", { s: SEEK_STEP })}><FastForward /></Button>
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={() => p.next()} title={t("ctl.next")}><SkipForward /></Button>
@@ -122,21 +130,33 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
         </div>
       </div>
 
-      {/* Droite : à suivre, vitesse, volume et plein écran */}
-      <div className="flex min-w-0 flex-col items-end gap-1.5">
-        <p className="max-w-full truncate text-xs text-muted-foreground" title={upNext?.title}>
-          {upNext ? <>{t("ctl.upNext")}<span className="text-foreground">{upNext.title}</span></> : p.shuffle ? t("ctl.shufflePlay") : t("ctl.endOfList")}
-          {p.current && <span> · {t("ctl.left", { d: formatTime(remaining) })}</span>}
-        </p>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant={p.rate === 1 ? "ghost" : "secondary"} className="h-9 min-w-12 px-2 tabular-nums" onClick={p.cycleRate} title={t("ctl.speed")}><Gauge /> {p.rate}×</Button>
-          <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={p.toggleMute} title={t("ctl.mute")}>{p.muted || p.volume === 0 ? <VolumeX /> : <Volume2 />}</Button>
-          <Slider className="w-28" min={0} max={1} step={0.01} value={[p.muted ? 0 : p.volume]} onValueChange={([v]) => p.setVolume(v)} />
-          <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">{Math.round((p.muted ? 0 : p.volume) * 100)}%</span>
-          <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" disabled={!p.current} onClick={() => (isVideo ? fullscreen() : onOpenVisualizer())} title={t("fs.open")}><Maximize /></Button>
-          <Button size="icon" className="size-11 [&_svg]:size-5" variant={lyricsOpen ? "secondary" : "ghost"} onClick={onToggleLyrics} title={t("lyr.toggle")}><MicVocal /></Button>
-          <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={onShowShortcuts} title={t("ctl.shortcuts")}><Keyboard /></Button>
+      {/* Droite : même structure en 3 rangées que la colonne centrale, pour que tout s'aligne en horizontal.
+          rangée 1 = boutons de contrôle (vitesse, égaliseur, vue) · rangée 2 = barre de progression ↔ volume · rangée 3 = boucle A-B/minuterie ↔ « à suivre ».
+          IMPORTANT : mêmes paddings (py-9), même gap-2 et mêmes hauteurs que le centre ; si on modifie l'un, modifier l'autre. */}
+      <div className="flex min-w-0 flex-col items-end gap-2">
+        <div className="flex items-center py-9">
+          <div className="flex h-14 items-center gap-1">
+            <Button size="sm" variant="ghost" className={cn("h-9 min-w-14 rounded-full px-3 tabular-nums", p.rate !== 1 && ACTIVE_BTN)} onClick={p.cycleRate} title={t("ctl.speed")}><Gauge /> {p.rate}×</Button>
+            <Button size="icon" className={cn("size-9 rounded-full [&_svg]:size-4", eqOpen && ACTIVE_BTN)} variant="ghost" onClick={onToggleEq} title={t("eq.title")}>
+              <span className="relative"><SlidersVertical />{eq.enabled && <span className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary" aria-hidden />}</span>
+            </Button>
+            <span className="mx-1 h-5 w-px bg-border" />
+            <Button size="icon" className="size-9 rounded-full [&_svg]:size-4" variant="ghost" disabled={!p.current} onClick={() => (isVideo ? fullscreen() : onOpenVisualizer())} title={t("fs.open")}><Maximize /></Button>
+            <Button size="icon" className={cn("size-9 rounded-full [&_svg]:size-4", lyricsOpen && ACTIVE_BTN)} variant="ghost" onClick={onToggleLyrics} title={t("lyr.toggle")}><MicVocal /></Button>
+            <Button size="icon" className="size-9 rounded-full [&_svg]:size-4" variant="ghost" onClick={onShowShortcuts} title={t("ctl.shortcuts")}><Keyboard /></Button>
+          </div>
         </div>
+        <div className="flex w-full items-center gap-2">
+          <button type="button" className="text-muted-foreground transition-colors hover:text-foreground [&_svg]:size-4" onClick={p.toggleMute} title={t("ctl.mute")}>{p.muted || p.volume === 0 ? <VolumeX /> : <Volume2 />}</button>
+          <Slider className="flex-1" min={0} max={1} step={0.01} value={[p.muted ? 0 : p.volume]} onValueChange={([v]) => p.setVolume(v)} />
+          <span className="w-10 text-left text-xs tabular-nums text-muted-foreground">{Math.round((p.muted ? 0 : p.volume) * 100)}%</span>
+        </div>
+        <p className="flex h-7 max-w-full items-center truncate text-xs text-muted-foreground" title={upNext?.title}>
+          <span className="truncate">
+            {upNext ? <>{t("ctl.upNext")}<span className="text-foreground">{upNext.title}</span></> : p.shuffle ? t("ctl.shufflePlay") : t("ctl.endOfList")}
+            {p.current && <span> · {t("ctl.left", { d: formatTime(remaining) })}</span>}
+          </span>
+        </p>
       </div>
     </footer>
   );

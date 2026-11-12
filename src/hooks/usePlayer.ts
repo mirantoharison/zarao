@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { localPlayUrl, probeLocal } from "@/lib/api";
-import { guessFromName, isSupported, loadMetadata, makeItem, needsServerProbe, probeDuration, type MediaItem } from "@/lib/media";
+import { attachEqualizer, getEqualizer, useEqualizer, wantsEqualizerGraph } from "@/lib/equalizer";
+import { guessFromName, isSupported, loadMetadata, localUrl, makeItem, needsServerProbe, probeDuration, type MediaItem } from "@/lib/media";
 
 export type RepeatMode = "off" | "all" | "one";
 export type SleepMode = "off" | "track" | 15 | 30 | 60;
@@ -22,10 +23,19 @@ function readStoredPaths(key: string): string[] {
  * IMPORTANT : un seul élément <video> sert pour l'audio comme pour la vidéo — il évite de
  * dupliquer toute la logique de lecture et de changer d'élément (donc de perdre le volume) entre deux pistes.
  */
+/**
+ * Adresse à donner à l'élément média. Égaliseur engagé : un fichier local lu en direct passe par le serveur local (CORS),
+ * car le protocole asset de Tauri rendrait le son muet une fois l'élément routé dans Web Audio (cf. lib/equalizer.ts).
+ */
+const sourceFor = (item: MediaItem) =>
+  getEqualizer().engaged && item.source === "local" && (!item.playMode || item.playMode === "direct") ? localPlayUrl(item.path) : item.url;
+
 export function usePlayer(opts: { storageKey?: string | null } = {}) {
   // IMPORTANT : null = pas de persistance (mode en ligne : la playlist se reconstruit depuis le serveur).
   const storageKey = opts.storageKey === undefined ? STORAGE_KEY : opts.storageKey;
   const mediaRef = useRef<HTMLVideoElement | null>(null);
+  const eq = useEqualizer();
+  const wantsGraph = wantsEqualizerGraph(eq);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -247,6 +257,49 @@ export function usePlayer(opts: { storageKey?: string | null } = {}) {
     setCurrentId(null);
   }, []);
 
+  /** Piste suspendue par `suspend()` : de quoi reprendre exactement au même endroit. */
+  const suspendedRef = useRef<{ id: string; time: number; playing: boolean } | null>(null);
+
+  /**
+   * Relâche le fichier de la piste en cours SANS la quitter (Windows refuse de remplacer un fichier encore ouvert).
+   * Contrairement à `release()`, la piste reste sélectionnée : `resume()` la recharge à la même position.
+   */
+  const suspend = useCallback(() => {
+    const m = mediaRef.current;
+    const id = stateRef.current.currentId;
+    if (!m || !id) return;
+    suspendedRef.current = { id, time: getTime(), playing: !m.paused };
+    m.pause();
+    m.removeAttribute("src");
+    m.load();
+  }, [getTime]);
+
+  /** Recharge la piste suspendue à la position où elle s'était arrêtée ; `newPath` si le fichier a été renommé entre-temps. */
+  const resume = useCallback((newPath?: string) => {
+    const s = suspendedRef.current;
+    suspendedRef.current = null;
+    const m = mediaRef.current;
+    if (!s || !m || stateRef.current.currentId !== s.id) return;
+    const found = stateRef.current.items.find((i) => i.id === s.id);
+    if (!found) return;
+    const item = newPath && newPath !== found.path ? { ...found, path: newPath, url: localUrl(newPath, found.playMode) } : found;
+    const play = () => { if (s.playing) m.play().catch(() => setPlaying(false)); };
+    if (item.playMode && item.playMode !== "direct") {
+      // Flux produit à la volée : on le relance à l'instant voulu (cf. seekTo).
+      offsetRef.current = s.time;
+      m.dataset.offset = String(s.time);
+      m.src = `${item.url}${item.url.includes("?") ? "&" : "?"}time=${s.time.toFixed(2)}`;
+      m.load();
+      play();
+      return;
+    }
+    offsetRef.current = 0;
+    m.dataset.offset = "0";
+    m.src = sourceFor(item);
+    m.load();
+    m.addEventListener("loadedmetadata", () => { m.currentTime = s.time; play(); }, { once: true });
+  }, []);
+
   const clear = useCallback(() => removeItems(stateRef.current.items.map((i) => i.id)), [removeItems]);
 
   // Charge la source quand la piste change.
@@ -257,7 +310,9 @@ export function usePlayer(opts: { storageKey?: string | null } = {}) {
     offsetRef.current = 0;
     m.dataset.offset = "0";
     if (!current) { m.removeAttribute("src"); m.load(); setTime(0); setDuration(0); return; }
-    m.src = current.url;
+    // Égaliseur actif (ou déjà engagé) : crossOrigin AVANT src, et branchement avant le chargement.
+    if (wantsEqualizerGraph() || getEqualizer().engaged) { m.crossOrigin = "anonymous"; attachEqualizer(m); }
+    m.src = sourceFor(current);
     m.load();
     m.play().catch(() => setPlaying(false));
   }, [current?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -273,6 +328,22 @@ export function usePlayer(opts: { storageKey?: string | null } = {}) {
     const m = mediaRef.current;
     if (m) { m.defaultPlaybackRate = rate; m.playbackRate = rate; }
   }, [rate, current?.id]);
+
+  // Égaliseur activé en cours de lecture : on recharge la piste à la même position avec une source compatible Web Audio.
+  useEffect(() => {
+    const m = mediaRef.current;
+    const item = stateRef.current.items.find((i) => i.id === stateRef.current.currentId);
+    if (!m || !wantsGraph || eq.engaged) return;
+    m.crossOrigin = "anonymous";
+    attachEqualizer(m);
+    if (!item) return;
+    const resumeAt = getTime();
+    const wasPlaying = !m.paused;
+    if (item.playMode && item.playMode !== "direct") { seekTo(resumeAt, wasPlaying); return; }
+    m.src = sourceFor(item);
+    m.load();
+    m.addEventListener("loadedmetadata", () => { m.currentTime = resumeAt; if (wasPlaying) void m.play().catch(() => undefined); }, { once: true });
+  }, [wantsGraph]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Minuterie : compte à rebours en secondes, pause à zéro.
   useEffect(() => {
@@ -352,7 +423,7 @@ export function usePlayer(opts: { storageKey?: string | null } = {}) {
 
   return {
     mediaRef, items, current, playing, time, duration, volume, muted, repeat, shuffle, rate, loop, sleepMode, sleepLeft,
-    addPaths, addItems, updateItem, play, next, previous, togglePlay, stop, seek, setVolume, removeItems, clear, release, moveItems, moveBefore, setOrder, shuffleOrder,
+    addPaths, addItems, updateItem, suspend, resume, play, next, previous, togglePlay, stop, seek, setVolume, removeItems, clear, release, moveItems, moveBefore, setOrder, shuffleOrder,
     setLoopA: () => setLoop({ a: getTime(), b: null }),
     // B doit suivre A ; sinon on ignore le clic plutôt que de créer une boucle vide.
     setLoopB: () => setLoop((l) => { const t = getTime(); return l.a !== null && t > l.a ? { ...l, b: t } : l; }),
