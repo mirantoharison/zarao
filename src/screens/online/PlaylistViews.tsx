@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, Compass, Library, ListMusic, ListPlus, Pencil, Play, Plus, Trash2, X } from "lucide-react";
+import { LoadingState } from "@/components/LoadingState";
 import { EmptyState } from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -54,7 +55,7 @@ export function PlaylistList({ user, onOpen, refreshToken }: ListProps) {
       </div>
 
       {error && <p className="text-sm text-destructive">{t("on.serverDown")}</p>}
-      {lists === null && <p className="py-6 text-sm text-muted-foreground">{t("on.loading")}</p>}
+      {lists === null && <LoadingState title={t("ld.playlists")} description={t("ld.playlistsBody")} />}
       {lists?.length === 0 && !error && (
         <EmptyState icon={Library} title={t("em.plTitle")} description={t("em.plBody")} actions={[{ label: t("pl.new"), icon: Plus, onClick: () => setCreating(true) }]} />
       )}
@@ -164,7 +165,7 @@ export function PlaylistDetail({ user, id, currentRemoteId, playing, onBack, onB
       </div>
 
       {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-      {items === null && <p className="py-6 text-sm text-muted-foreground">{t("on.loading")}</p>}
+      {items === null && <LoadingState title={t("ld.playlist")} description={t("ld.playlistBody")} />}
       {items && list.length === 0 && !error && (
         <EmptyState icon={ListMusic} title={t("em.plOneTitle")} description={t("em.plOneBody")} actions={onBrowse ? [{ label: t("em.queueBrowse"), icon: Compass, onClick: onBrowse }] : undefined} />
       )}

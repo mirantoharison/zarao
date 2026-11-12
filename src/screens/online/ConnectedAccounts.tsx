@@ -72,7 +72,7 @@ export function ConnectedAccounts({ userId, onLinksChange }: Props) {
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("ac.connDesc")}</p>
       </div>
 
-      {notice && <p role="status" className={cn("text-sm", notice.kind === "ok" ? "text-emerald-400" : "text-destructive")}>{notice.text}</p>}
+      {notice && <p role="status" className={cn("text-sm", notice.kind === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive")}>{notice.text}</p>}
 
       <div className="grid gap-3 lg:grid-cols-2">
         {OAUTH_PROVIDERS.map((provider) => {

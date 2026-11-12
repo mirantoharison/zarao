@@ -1,10 +1,12 @@
+import { PaletteMenuItems } from "@/components/PaletteMenuItems";
+import { ZoomMenuItems } from "@/components/ZoomMenuItems";
 import { VideoStage, toggleVideoFullscreen } from "@/components/VideoStage";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Download, Maximize, Tags, Settings, Heart, ChevronDown, ChevronUp, ListChecks, Pin, ArrowDown, ArrowLeftRight, ArrowUp, FileAudio, FilePlus, FolderOpen, ListPlus, LogOut, Save, Trash2, Volume1, FileVideo, GalleryVertical, Grid2x2, LayoutList, ListMusic, Music, Play, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, Disc3, GalleryHorizontal, MicVocal, ChevronLeft, ChevronRight, Rows3, Eraser, SlidersHorizontal, X } from "lucide-react";
+import { Download, Maximize, Tags, Settings, Heart, ChevronDown, ChevronUp, ListChecks, Pin, ArrowDown, ArrowLeftRight, ArrowUp, FileAudio, FilePlus, FolderOpen, ListPlus, LogOut, Save, Trash2, Volume1, FileVideo, GalleryVertical, Grid2x2, LayoutList, ListMusic, Music, Play, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, Disc3, GalleryHorizontal, MicVocal, ChevronLeft, ChevronRight, Rows3, Eraser, SlidersHorizontal, X, History, CaseSensitive, Regex, WholeWord } from "lucide-react";
 import { PlayerBar, SEEK_STEP } from "@/components/PlayerBar";
 import { PlayingBars } from "@/components/PlayingBars";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +28,7 @@ import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { FullscreenPlayer } from "@/components/FullscreenPlayer";
 import { activeLine, type Lyrics } from "@/lib/lyrics";
 import { LyricsPanel } from "@/components/LyricsPanel";
+import { EqualizerPanel } from "@/components/EqualizerPanel";
 import { MetadataDialog, type MetadataSaved, type MetadataSource } from "@/components/MetadataDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { tr, useI18n } from "@/i18n";
@@ -93,6 +96,7 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [visualizerOpen, setVisualizerOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [eqOpen, setEqOpen] = useState(false);
   // Incrémenté après une modification des paroles : recharge celles de la piste en cours.
   const [lyricsRefresh, setLyricsRefresh] = useState(0);
   const lyrics = useLyrics(p.current, lyricsRefresh);
@@ -209,6 +213,8 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
     setLyricsRefresh((n) => n + 1);
     if (!metaTarget || metaTarget.source.kind !== "local") return;
     const oldPath = metaTarget.source.path;
+    // Le dialogue reste ouvert après l'enregistrement : sa cible suit le fichier renommé.
+    if (saved.path && saved.path !== oldPath) setMetaTarget((m) => (m && m.source.kind === "local" ? { ...m, source: { ...m.source, path: saved.path as string } } : m));
     p.updateItem(metaTarget.id, (i) => ({
       ...i,
       title: saved.tags.title || i.title, artist: saved.tags.artist, year: saved.tags.date, jacket: saved.jacket || undefined,
@@ -263,6 +269,9 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // Expression invalide : buildMatcher n'applique alors aucun filtre ; on le signale au lieu de laisser croire à « aucun résultat ».
+  const regexError = useRegex && query !== "" && (() => { try { new RegExp(query); return false; } catch { return true; } })();
 
   const SortIcon = ({ k }: { k: SortKey }) => (sort?.key === k ? (sort.dir === 1 ? <ArrowUp className="ml-1 inline size-3" /> : <ArrowDown className="ml-1 inline size-3" />) : null);
   const isVideo = p.current?.kind === "video";
@@ -320,6 +329,10 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <MenubarItem onClick={() => setView("rows")}><Rows3 /> {t("view.rows")}</MenubarItem>
               <MenubarSeparator />
               <MenubarItem onClick={() => setSearchOpen((o) => !o)}><Search /> {t("view.search")} <MenubarShortcut>Ctrl + F</MenubarShortcut></MenubarItem>
+              <MenubarSeparator />
+              <ZoomMenuItems />
+              <MenubarSeparator />
+              <PaletteMenuItems />
             </MenubarContent>
           </MenubarMenu>
         </Menubar>
@@ -338,6 +351,11 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
       {message && <p className="border-b bg-destructive/10 px-3 py-1.5 text-sm text-destructive">{message}</p>}
 
       <main className="relative flex min-h-0 flex-1 overflow-hidden">
+        {/* Égaliseur : volet à gauche (premier enfant en flux ; la liste, elle, est superposée à droite). */}
+        {/* Toujours monté : la largeur s'anime (ouverture ET fermeture) ; `inert` retire le volet fermé du clavier et des lecteurs d'écran. */}
+        <aside inert={!eqOpen} aria-hidden={!eqOpen} className={cn("shrink-0 overflow-hidden bg-background/90 backdrop-blur-2xl transition-[width,border-color] duration-300 ease-out", eqOpen ? "w-[30rem] border-r" : "w-0 border-r-0")}>
+          <EqualizerPanel className={cn("h-full w-[30rem] transition-opacity duration-300", eqOpen ? "opacity-100" : "opacity-0")} onClose={() => setEqOpen(false)} />
+        </aside>
         {/* Playlist */}
         {/* Tiroir : toujours monté (le glisser-déposer et la liste gardent leur état), glisse depuis la droite. */}
         <section className={cn("absolute inset-y-0 right-0 z-30 flex w-[min(52rem,80%)] flex-col overflow-hidden border-l bg-background/90 shadow-2xl backdrop-blur-2xl transition-transform duration-300 ease-out", listOpen || dropActive ? "translate-x-0" : "pointer-events-none translate-x-full")}>
@@ -350,7 +368,7 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
             </div>
             <Button size="icon" variant={searchOpen ? "secondary" : "ghost"} className="size-9 [&_svg]:size-4.5" onClick={() => setSearchOpen((o) => !o)} title={t("search.title")}><SlidersHorizontal /></Button>
             <Select value={sort?.key ?? "manual"} onValueChange={(v) => setSort(v === "manual" ? null : { key: v as SortKey, dir: sort?.dir ?? 1 })}>
-              <SelectTrigger className="h-9 w-36 text-sm" title={t("tool.sort")}><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-36" title={t("tool.sort")}><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="manual">{t("sort.manual")}</SelectItem>
                 <SelectItem value="artist">{t("sort.artist")}</SelectItem>
@@ -399,9 +417,9 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <img src="/zarao-logo.png" alt="" className="size-24" />
               <h2 className="text-xl font-semibold">{t("empty.title")}</h2>
               <p className="max-w-xl text-sm text-muted-foreground">{t("empty.body")}</p>
-              <button className="w-fit text-sm text-sky-400 hover:underline" onClick={() => addFrom(pickFiles)}>{t("empty.addFiles")}</button>
-              <button className="w-fit text-sm text-sky-400 hover:underline" onClick={() => addFrom(pickFolder)}>{t("empty.openFolder")}</button>
-              <button className="w-fit text-sm text-sky-400 hover:underline" onClick={openPlaylistReplace}>{t("empty.loadPlaylist")}</button>
+              <button className="w-fit text-sm text-sky-700 dark:text-sky-400 hover:underline" onClick={() => addFrom(pickFiles)}>{t("empty.addFiles")}</button>
+              <button className="w-fit text-sm text-sky-700 dark:text-sky-400 hover:underline" onClick={() => addFrom(pickFolder)}>{t("empty.openFolder")}</button>
+              <button className="w-fit text-sm text-sky-700 dark:text-sky-400 hover:underline" onClick={openPlaylistReplace}>{t("empty.loadPlaylist")}</button>
               <p className="mt-6 text-xs text-muted-foreground">
                 Zarao © 2026 - made with <span aria-label="arc-en-ciel, avocat, éléphant, poulet">🌈🥑🐘🐔</span> by Miranto Harison [mirantohrs@mail.com]
               </p>
@@ -494,7 +512,7 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
 
         {!isVideo && layout === "scene" && <SceneStage p={p} lyrics={lyrics.lyrics} onOpenLyrics={() => setLyricsOpen(true)} onFullscreen={openFullscreen} />}
         {!isVideo && layout === "strip" && (
-          <StripStage p={p} lyrics={lyrics.lyrics} loading={lyrics.loading}
+          <StripStage p={p} lyrics={lyrics.lyrics} loading={lyrics.loading} onSearchOnline={lyrics.searchOnline} source={lyrics.source}
             onEdit={() => p.current && setMetaTarget({ id: p.current.id, source: { kind: "local", path: p.current.path, isVideo: p.current.kind === "video" } })} />
         )}
 
@@ -508,6 +526,8 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               hasTrack={Boolean(p.current)}
               time={p.time}
               onSeek={p.seek}
+              onSearchOnline={lyrics.searchOnline}
+              source={lyrics.source}
               onClose={() => setLyricsOpen(false)}
               onEdit={() => p.current && setMetaTarget({ id: p.current.id, source: { kind: "local", path: p.current.path, isVideo: p.current.kind === "video" } })}
             />
@@ -524,42 +544,101 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         onShowShortcuts={() => setShortcutsOpen(true)}
         onOpenVisualizer={openFullscreen}
         lyricsOpen={lyricsOpen}
+        eqOpen={eqOpen}
+        onToggleEq={() => setEqOpen((o) => !o)}
         onToggleLyrics={() => setLyricsOpen((o) => !o)}
       />
       <FullscreenPlayer p={p} open={visualizerOpen} onClose={() => setVisualizerOpen(false)} lyrics={lyrics.lyrics} />
 
       {/* Recherche : fenêtre détachée, fond flouté (le filtre s'applique en direct à la liste derrière) */}
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <DialogContent className="sm:max-w-md" onOpenAutoFocus={(e) => { e.preventDefault(); searchInputRef.current?.focus(); }}>
+        <DialogContent className="sm:max-w-lg" onOpenAutoFocus={(e) => { e.preventDefault(); searchInputRef.current?.focus(); }}>
           <DialogHeader>
-            <DialogTitle>{t("search.title")}</DialogTitle>
-            <DialogDescription>{t("search.desc")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-base">
-            <Select value={field} onValueChange={(v) => setField(v as SearchField)}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {SEARCH_FIELDS.map((k) => <SelectItem key={k} value={k}>{t(`field.${k}` as const)}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Input ref={searchInputRef} placeholder={t("search.placeholder")} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { commitSearch(); setSearchOpen(false); } }} />
-            <label className="flex items-center gap-2"><Checkbox checked={exact} onCheckedChange={(v) => setExact(v === true)} /> {t("search.exact")}</label>
-            <label className="flex items-center gap-2"><Checkbox checked={matchCase} onCheckedChange={(v) => setMatchCase(v === true)} /> {t("search.case")}</label>
-            <label className="flex items-center gap-2"><Checkbox checked={useRegex} onCheckedChange={(v) => setUseRegex(v === true)} /> {t("search.regex")}</label>
-            <div className="flex gap-2">
-              <Button className="flex-1" onClick={() => { commitSearch(); setSearchOpen(false); }}><Search /> {t("search.run")}</Button>
-              <Button variant="outline" disabled={!query} onClick={() => setQuery("")}>{t("search.reset")}</Button>
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary"><Search className="size-5" /></span>
+              <div className="min-w-0">
+                <DialogTitle>{t("search.title")}</DialogTitle>
+                <DialogDescription>{t("search.desc")}</DialogDescription>
+              </div>
             </div>
-            <div>
-              <div className="mb-1.5 flex items-center justify-between text-muted-foreground">
-                <span>{t("search.recent")}</span>
-                {history.length > 0 && <button className="text-sm hover:underline" onClick={clearHistory}>{t("search.clear")}</button>}
+          </DialogHeader>
+
+          <div className="space-y-5">
+            {/* Champ de recherche large, avec effacement et résultat en direct */}
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  ref={searchInputRef}
+                  className="h-11 pl-9 pr-9 text-base"
+                  placeholder={t("search.placeholder")}
+                  value={query}
+                  aria-invalid={regexError}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { commitSearch(); setSearchOpen(false); } }}
+                />
+                {query && <button type="button" aria-label={t("search.reset")} className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground hover:bg-accent" onClick={() => setQuery("")}><X className="size-4" /></button>}
+              </div>
+              {regexError
+                ? <p className="text-xs text-destructive" role="alert">{t("search.regexInvalid")}</p>
+                : <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
+                    <span className={cn("size-2 rounded-full", !query ? "bg-muted-foreground/40" : visible.length > 0 ? "bg-emerald-500" : "bg-destructive")} />
+                    {query ? t("search.results", { n: visible.length, m: p.items.length }) : t("search.enter")}
+                  </p>}
+            </div>
+
+            {/* Champ visé : pastilles au lieu d'une liste déroulante, pour voir toutes les options d'un coup d'œil */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("search.in")}</p>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label={t("search.in")}>
+                {SEARCH_FIELDS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={field === k}
+                    onClick={() => setField(k)}
+                    className={cn("rounded-full border px-3 py-1 text-sm transition-colors", field === k ? "border-primary/50 bg-primary/15 text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}
+                  >{t(`field.${k}` as const)}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Options : trois interrupteurs avec icône, plus lisibles que trois cases */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("search.options")}</p>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  [exact, setExact, WholeWord, "search.exact"],
+                  [matchCase, setMatchCase, CaseSensitive, "search.case"],
+                  [useRegex, setUseRegex, Regex, "search.regex"],
+                ] as const).map(([on, set, Icon, label]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => set(!on)}
+                    className={cn("flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-center text-xs transition-colors", on ? "border-primary/50 bg-primary/15 text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}
+                  ><Icon className="size-5" />{t(label)}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Recherches récentes */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"><History className="size-3.5" />{t("search.recent")}</p>
+                {history.length > 0 && <button type="button" className="text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={clearHistory}>{t("search.clear")}</button>}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {history.length === 0 && <span className="text-sm text-muted-foreground">{t("search.noRecent")}</span>}
-                {history.map((h) => <button key={h} className="rounded-full border px-2.5 py-0.5 text-sm hover:bg-accent" onClick={() => setQuery(h)}>{h}</button>)}
+                {history.map((h) => <button key={h} type="button" className="max-w-full truncate rounded-full border px-2.5 py-0.5 text-sm hover:bg-accent" onClick={() => setQuery(h)}>{h}</button>)}
               </div>
             </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button variant="outline" disabled={!query} onClick={() => setQuery("")}>{t("search.reset")}</Button>
+            <Button className="flex-1" onClick={() => { commitSearch(); setSearchOpen(false); }}><Search /> {t("search.run")}</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -569,7 +648,8 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         source={metaTarget?.source ?? null}
         onClose={() => setMetaTarget(null)}
         onSaved={onMetadataSaved}
-        beforeSave={() => { if (metaTarget && p.current?.id === metaTarget.id) p.release(); }}
+        beforeSave={() => { if (metaTarget && p.current?.id === metaTarget.id) p.suspend(); }}
+        afterSave={(newPath) => p.resume(newPath)}
       />
 
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
@@ -801,7 +881,7 @@ function SceneStage({ p, lyrics, onOpenLyrics, onFullscreen }: { p: ReturnType<t
 }
 
 /** Disposition « paroles et bande » : paroles en grand, petite pochette, file de lecture en bande horizontale de pochettes. */
-function StripStage({ p, lyrics, loading, onEdit }: { p: ReturnType<typeof usePlayer>; lyrics: Lyrics | null; loading: boolean; onEdit: () => void }) {
+function StripStage({ p, lyrics, loading, onEdit, onSearchOnline, source }: { p: ReturnType<typeof usePlayer>; lyrics: Lyrics | null; loading: boolean; onEdit: () => void; onSearchOnline: () => Promise<boolean>; source: "lrclib" | null }) {
   const { t } = useI18n();
   const cur = p.current;
   const trackRef = useRef<HTMLDivElement>(null);
@@ -817,7 +897,7 @@ function StripStage({ p, lyrics, loading, onEdit }: { p: ReturnType<typeof usePl
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1">
-        <LyricsPanel className="min-w-0 flex-1" lyrics={lyrics} loading={loading} hasTrack={Boolean(cur)} time={p.time} onSeek={p.seek} onEdit={onEdit} />
+        <LyricsPanel className="min-w-0 flex-1" lyrics={lyrics} loading={loading} hasTrack={Boolean(cur)} time={p.time} onSeek={p.seek} onEdit={onEdit} onSearchOnline={onSearchOnline} source={source} />
         <aside className="hidden w-48 shrink-0 flex-col gap-2 border-l p-4 md:flex">
           <Cover item={cur} className="w-full" />
           <p className="truncate text-sm font-medium" title={cur?.title}>{cur?.title ?? t("np.none")}</p>
@@ -828,7 +908,8 @@ function StripStage({ p, lyrics, loading, onEdit }: { p: ReturnType<typeof usePl
         <h3 className="px-4 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("np.queue")}</h3>
         {/* Carrousel de cartes : défilement aimanté, morceau en cours centré, flèches sur les bords et fondus pour signaler la suite. */}
         <div className="relative">
-          <ScrollArea className="w-full" viewportRef={trackRef} viewportProps={{ className: "snap-x snap-mandatory", onWheel }}>
+          {/* IMPORTANT : div natif plutôt que ScrollArea — barre masquée (webkit + Firefox) mais le défilement (molette, tactile, flèches) reste actif. */}
+          <div ref={trackRef} onWheel={onWheel} className="w-full snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <div className="flex w-max gap-3 px-12 py-3">
               {p.items.map((i, n) => {
                 const isCur = cur?.id === i.id;
@@ -853,7 +934,7 @@ function StripStage({ p, lyrics, loading, onEdit }: { p: ReturnType<typeof usePl
                 );
               })}
             </div>
-          </ScrollArea>
+          </div>
           <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-background to-transparent" />
           <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-background to-transparent" />
           <Button size="icon" variant="secondary" className="absolute left-2 top-1/2 z-10 size-9 -translate-y-1/2 rounded-full shadow-md" onClick={() => scrollQueue(-1)} title={t("ctl.previous")}><ChevronLeft /></Button>

@@ -59,7 +59,7 @@ export function SecuritySection({ userId, links }: { userId: string; links: OAut
     <li className="flex items-center gap-3 rounded-lg border p-3">
       <div className="grid size-9 shrink-0 place-items-center rounded-md border bg-background">{icon}</div>
       <div className="min-w-0 flex-1"><p className="text-sm font-medium">{title}</p><p className="truncate text-xs text-muted-foreground">{desc}</p></div>
-      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">{t("ac.methodActive")}</span>
+      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">{t("ac.methodActive")}</span>
     </li>
   );
 
@@ -74,7 +74,7 @@ export function SecuritySection({ userId, links }: { userId: string; links: OAut
         <PasswordField id="sec-new" label={t("acc.new")} hint={t("ac.newHint")} value={next} onChange={setNext} autoComplete="new-password" disabled={busy} />
         <PasswordField id="sec-confirm" label={t("acc.confirmNew")} hint={t("ac.confirmHint")} value={confirm} onChange={setConfirm} autoComplete="new-password" disabled={busy} />
         {result?.kind === "error" && <p className="text-sm text-destructive" role="alert">{result.message}</p>}
-        {result?.kind === "ok" && <p className="text-sm text-emerald-400" role="status">{t("acc.changed")}</p>}
+        {result?.kind === "ok" && <p className="text-sm text-emerald-700 dark:text-emerald-400" role="status">{t("acc.changed")}</p>}
         <Button type="submit" disabled={busy}>{busy ? t("ac.pwSaving") : t("acc.change")}</Button>
       </form>
 

@@ -1,3 +1,4 @@
+import { LoadingState } from "@/components/LoadingState";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useEffect, useState, type FormEvent } from "react";
 import { ListMusic, Plus } from "lucide-react";
@@ -120,7 +121,7 @@ export function AddToPlaylistDialog({ mediaIds, userid, onClose, onDone }: AddPr
             <DialogDescription>{t("pl.pick")}</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-72"><div className="space-y-1 pr-3">
-            {lists === null && <p className="py-4 text-sm text-muted-foreground">{t("on.loading")}</p>}
+            {lists === null && <LoadingState compact title={t("ld.playlists")} />}
             {lists?.length === 0 && !error && <p className="py-4 text-sm text-muted-foreground">{t("pl.empty")}</p>}
             {lists?.map((l) => (
               <button key={l.id} disabled={busy} onClick={() => void addTo(l)} className="flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left hover:bg-accent disabled:opacity-50">

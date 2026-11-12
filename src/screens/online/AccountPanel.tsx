@@ -1,3 +1,4 @@
+import { LoadingState } from "@/components/LoadingState";
 import { useCallback, useEffect, useState } from "react";
 import { ShieldCheck, User } from "lucide-react";
 import { useI18n } from "@/i18n";
@@ -56,9 +57,9 @@ export function AccountPanel({ user, onUserChange }: { user: SessionUser; onUser
         ))}
       </div>
 
-      {notice && <p role="status" className={cn("text-sm", notice.kind === "ok" ? "text-emerald-400" : "text-destructive")}>{notice.text}</p>}
+      {notice && <p role="status" className={cn("text-sm", notice.kind === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive")}>{notice.text}</p>}
 
-      {account === undefined && <p className="text-sm text-muted-foreground">{t("ac.loading")}</p>}
+      {account === undefined && <LoadingState title={t("ld.account")} description={t("ld.accountBody")} />}
       {account === null && <p className="text-sm text-destructive">{t("ac.readFailed")}</p>}
 
       {account && tab === "account" && (

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Check, FileAudio, FileText, FileVideo, ImagePlus, Loader2, UploadCloud, Upload, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Copy, FileAudio, FileText, FileVideo, ImagePlus, ListMusic, Loader2, Plus, UploadCloud, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +10,34 @@ import { readFileTags } from "@/lib/tags";
 import { cn } from "@/lib/utils";
 
 type Props = { userid: string; onUploaded: () => void };
+
+/** Confirmation d'enregistrement : pastille de succès, référence copiable et deux actions claires (au lieu d'une phrase soulignée). */
+function DoneCard({ id, onList, onAnother }: { id: string; onList: () => void; onAnother: () => void }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(id); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* presse-papiers indisponible : la référence reste affichée et sélectionnable */ }
+  }
+  return (
+    <div role="status" className="flex flex-col gap-4 rounded-xl bg-emerald-500/10 p-4 sm:flex-row sm:items-center">
+      <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-400"><Check className="size-6" /></span>
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-semibold text-emerald-300">{t("up.doneTitle")}</p>
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span>{t("up.reference")}</span>
+          <code className="min-w-0 select-all truncate rounded-md bg-background/40 px-1.5 py-0.5 font-mono text-foreground">{id}</code>
+          <button type="button" onClick={() => void copy()} className="grid size-6 shrink-0 place-items-center rounded-md transition-colors hover:bg-background/40 hover:text-foreground" title={t("player.copy")} aria-label={t("player.copy")}>
+            {copied ? <Check className="size-3.5 text-emerald-700 dark:text-emerald-400" /> : <Copy className="size-3.5" />}
+          </button>
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        <Button type="button" className="rounded-full" onClick={onList}><ListMusic /> {t("up.seeList")}</Button>
+        <Button type="button" variant="outline" className="rounded-full" onClick={onAnother}><Plus /> {t("up.another")}</Button>
+      </div>
+    </div>
+  );
+}
 type Status = { kind: "idle" } | { kind: "uploading"; percent: number } | { kind: "done"; id: string } | { kind: "error"; message: string };
 type Fields = Record<"artist" | "title" | "genre" | "date" | "album" | "composer" | "disc" | "track" | "copyright" | "publisher", string>;
 
@@ -252,7 +280,7 @@ export function UploadForm({ userid, onUploaded }: Props) {
 
       {stage === "info" ? (
         <>
-          <p className={cn("text-sm", tagsFound ? "text-emerald-400" : "text-muted-foreground")}>{tagsFound ? t("up.tagsFound") : t("up.noTags")}</p>
+          <p className={cn("text-sm", tagsFound ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground")}>{tagsFound ? t("up.tagsFound") : t("up.noTags")}</p>
           <div className="grid gap-4 sm:grid-cols-2">
             {field("artist", "up.artist")}
             {field("title", "up.mediaTitle")}
@@ -303,7 +331,7 @@ export function UploadForm({ userid, onUploaded }: Props) {
                     <p className="truncate text-sm font-medium" title={lyrics.name}>{lyrics.name}</p>
                     <p className="flex items-center gap-2 text-xs text-muted-foreground">
                       {lyricsInfo && (
-                        <span className={cn("rounded-full px-2 py-0.5 font-medium", lyricsInfo.synced ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground")}>
+                        <span className={cn("rounded-full px-2 py-0.5 font-medium", lyricsInfo.synced ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground")}>
                           {lyricsInfo.synced ? t("up.lyricsSynced") : t("up.lyricsPlain")}
                         </span>
                       )}
@@ -333,13 +361,7 @@ export function UploadForm({ userid, onUploaded }: Props) {
         </div>
       )}
       {status.kind === "error" && <p className="text-sm text-destructive" role="alert">{status.message}</p>}
-      {status.kind === "done" && (
-        <p className="text-sm text-emerald-400">
-          {t("up.done", { id: status.id })}{" "}
-          <button type="button" className="underline" onClick={onUploaded}>{t("up.seeList")}</button>{" · "}
-          <button type="button" className="underline" onClick={reset}>{t("up.another")}</button>
-        </p>
-      )}
+      {status.kind === "done" && <DoneCard id={status.id} onList={onUploaded} onAnother={reset} />}
 
       <div className="flex gap-2">
         <Button type="button" variant="outline" disabled={busy} onClick={() => (stage === "extras" ? setStage("info") : reset())}><ArrowLeft /> {t("up.back")}</Button>

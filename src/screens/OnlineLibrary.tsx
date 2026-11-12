@@ -1,14 +1,18 @@
+import { PaletteMenuItems } from "@/components/PaletteMenuItems";
+import { ZoomMenuItems } from "@/components/ZoomMenuItems";
 import { VideoStage, toggleVideoFullscreen } from "@/components/VideoStage";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeftRight, Compass, Download, Film, Home, Library, ListMusic, ListPlus, LogOut, Music, Plus, RefreshCw, Search, SearchX, Settings, Sparkles, Trash2, UserRound, X, PanelLeftClose, PanelLeftOpen, Grid2x2, Rows3, GalleryHorizontal } from "lucide-react";
+import { LoadingState } from "@/components/LoadingState";
 import { EmptyState } from "@/components/EmptyState";
 import { InfoNote, boldMarkup } from "@/components/InfoNote";
 import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { FullscreenPlayer } from "@/components/FullscreenPlayer";
 import { LyricsPanel } from "@/components/LyricsPanel";
+import { EqualizerPanel } from "@/components/EqualizerPanel";
 import { MetadataDialog, type MetadataSaved } from "@/components/MetadataDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { PlayerBar, SEEK_STEP } from "@/components/PlayerBar";
@@ -29,7 +33,7 @@ import { cn } from "@/lib/utils";
 import { getMeta } from "@/lib/api";
 import { AccountPanel } from "@/screens/online/AccountPanel";
 import { DetailDialog } from "@/screens/online/DetailDialog";
-import { MediaGrid, type MediaView } from "@/screens/online/MediaGrid";
+import { HomeHero, MediaCarousel, MediaGrid, type MediaView } from "@/screens/online/MediaGrid";
 import { AddToPlaylistDialog, NamePlaylistDialog } from "@/screens/online/PlaylistDialogs";
 import { PlaylistDetail, PlaylistList } from "@/screens/online/PlaylistViews";
 import { UploadForm } from "@/screens/online/UploadForm";
@@ -103,8 +107,19 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
 
   const [detailId, setDetailId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Barre de recherche collante : sa hauteur réelle est répercutée sur l'en-tête du volet des paroles.
+  const [searchEl, setSearchEl] = useState<HTMLFormElement | null>(null);
+  const [searchBarH, setSearchBarH] = useState<number>();
+  useEffect(() => {
+    if (!searchEl) { setSearchBarH(undefined); return; }
+    const ro = new ResizeObserver(() => setSearchBarH(searchEl.offsetHeight));
+    ro.observe(searchEl);
+    setSearchBarH(searchEl.offsetHeight);
+    return () => ro.disconnect();
+  }, [searchEl]);
   const [visualizerOpen, setVisualizerOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [eqOpen, setEqOpen] = useState(false);
   const [lyricsRefresh, setLyricsRefresh] = useState(0);
   const lyrics = useLyrics(p.current, lyricsRefresh);
   // Réactions du média en cours + comptabilisation du temps écouté (envoyé au changement de piste).
@@ -262,10 +277,13 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
   const currentRemoteId = p.current?.remoteId;
 
   // --- Rendu des sections ---
-  const section = (title: string, children: React.ReactNode, extra?: React.ReactNode) => (
-    <section className="space-y-3">
+  const section = (title: string, children: React.ReactNode, extra?: React.ReactNode, Icon?: React.ComponentType<{ className?: string }>) => (
+    <section className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">{title}</h2>
+        <h2 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight">
+          {Icon && <span aria-hidden="true" className="grid size-8 place-items-center rounded-lg bg-primary/15 text-primary"><Icon className="size-4" /></span>}
+          {title}
+        </h2>
         {extra}
       </div>
       {children}
@@ -279,7 +297,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
   const emptyVideos = <EmptyState icon={Film} title={t("em.videosTitle")} description={t("em.videosBody")} actions={[goUpload]} />;
   const emptyQueue = <EmptyState icon={ListMusic} title={t("em.queueTitle")} description={t("em.queueBody")} actions={[{ label: t("em.queueBrowse"), icon: Compass, onClick: () => setView("home") }]} />;
   const emptyDownloads = <EmptyState icon={Download} title={t("em.dlTitle")} description={t("em.dlBody")} actions={[{ label: t("em.queueBrowse"), icon: Compass, onClick: () => setView("home") }]} />;
-  const loading = <p className="py-6 text-sm text-muted-foreground">{t("on.loading")}</p>;
+  const loadingOf = (k: "news" | "search" | "music" | "videos") => <LoadingState title={t(`ld.${k}`)} description={t(`ld.${k}Body`)} />;
   const grid = (items: ServerMedia[], own?: { onDelete: (m: ServerMedia) => void }) => <MediaGrid view={mediaView} items={items} currentRemoteId={currentRemoteId} refreshToken={refreshToken} {...actions} onEdit={own ? (m) => setEditId(mediaId(m)) : undefined} onDelete={own?.onDelete} />;
 
   const content = (() => {
@@ -287,28 +305,33 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
       case "home":
         return (
           <div className="space-y-8">
-            {section(t("on.news"), news === null ? loading : news.length === 0 ? emptyNews : grid(news),
-              <Button size="sm" variant="ghost" onClick={refreshHome}><RefreshCw /> {t("on.refresh")}</Button>)}
+            {/* Accueil éditorial : bandeau « à la une » (média le plus récent), liste numérotée du reste, puis carrousel de suggestions. */}
+            {news !== null && news.length > 0 && <HomeHero items={news.slice(0, 10)} onPlay={actions.onPlay} onQueue={actions.onQueue} onDetails={actions.onDetails} onRefresh={refreshHome} />}
+            {(news === null || news.length !== 1) && section(t("on.news"), news === null ? loadingOf("news") : news.length === 0 ? emptyNews : (
+              <MediaGrid view="rows" numbered items={news} currentRemoteId={currentRemoteId} refreshToken={refreshToken} {...actions} />
+            ), news !== null && news.length === 0 ? (
+              <Button size="sm" variant="outline" className="rounded-full" onClick={refreshHome}><RefreshCw /> {t("on.refresh")}</Button>
+            ) : undefined, Sparkles)}
             {section(t("on.suggested"), suggested.length === 0 ? emptySuggested : (
               <>
-                {grid(suggested)}
-                {suggestedMore && <div className="flex justify-center pt-2"><Button variant="outline" onClick={() => void loadSuggested(false)}><Plus /> {t("on.more")}</Button></div>}
+                <MediaCarousel items={suggested} currentRemoteId={currentRemoteId} refreshToken={refreshToken} {...actions} />
+                {suggestedMore && <div className="flex justify-center pt-2"><Button variant="outline" className="rounded-full" onClick={() => void loadSuggested(false)}><Plus /> {t("on.more")}</Button></div>}
               </>
-            ))}
+            ), undefined, Compass)}
           </div>
         );
       case "search":
-        return section(t("on.results", { q: searchQuery }), searching && results.length === 0 ? loading : results.length === 0 ? emptyResults : (
+        return section(t("on.results", { q: searchQuery }), searching && results.length === 0 ? loadingOf("search") : results.length === 0 ? emptyResults : (
           <>
             {grid(results)}
             {resultsMore && <div className="flex justify-center pt-2"><Button variant="outline" disabled={searching} onClick={() => void runSearch(searchQuery, true)}><Plus /> {t("on.more")}</Button></div>}
           </>
         ));
       case "music":
-        return section(t("nav.music"), own.music === null ? loading : own.music.length === 0 ? emptyMusic : grid(own.music, { onDelete: setDeleteTarget }),
+        return section(t("nav.music"), own.music === null ? loadingOf("music") : own.music.length === 0 ? emptyMusic : grid(own.music, { onDelete: setDeleteTarget }),
           <Button size="sm" onClick={() => setView("upload")}><Plus /> {t("nav.upload")}</Button>);
       case "videos":
-        return section(t("nav.videos"), own.video === null ? loading : own.video.length === 0 ? emptyVideos : grid(own.video, { onDelete: setDeleteTarget }),
+        return section(t("nav.videos"), own.video === null ? loadingOf("videos") : own.video.length === 0 ? emptyVideos : grid(own.video, { onDelete: setDeleteTarget }),
           <Button size="sm" onClick={() => setView("upload")}><Plus /> {t("nav.upload")}</Button>);
       case "queue":
         return section(t("nav.queue"), p.items.length === 0 ? emptyQueue : (
@@ -394,6 +417,14 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
               <MenubarItem onClick={() => void getCurrentWindow().close()}><X /> {t("file.quit")}</MenubarItem>
             </MenubarContent>
           </MenubarMenu>
+          <MenubarMenu>
+            <MenubarTrigger>{t("menu.view")}</MenubarTrigger>
+            <MenubarContent>
+              <ZoomMenuItems />
+              <MenubarSeparator />
+              <PaletteMenuItems />
+            </MenubarContent>
+          </MenubarMenu>
         </Menubar>
         <div className="ml-auto flex items-center gap-3">
           <button className="flex items-center gap-2 rounded-full py-0.5 pl-0.5 pr-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" onClick={() => setView("account")} title={t("nav.account")}>
@@ -409,8 +440,13 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
       {notice && <p className="border-b bg-accent px-3 py-1.5 text-sm">{notice}</p>}
 
       <main className="flex min-h-0 flex-1">
+        {/* Égaliseur : volet à gauche, à l'opposé des paroles. */}
+        {/* Toujours monté : la largeur s'anime (ouverture ET fermeture) ; `inert` retire le volet fermé du clavier et des lecteurs d'écran. */}
+        <aside inert={!eqOpen} aria-hidden={!eqOpen} className={cn("shrink-0 overflow-hidden bg-background/90 backdrop-blur-2xl transition-[width,border-color] duration-300 ease-out", eqOpen ? "w-[30rem] border-r" : "w-0 border-r-0")}>
+          <EqualizerPanel className={cn("h-full w-[30rem] transition-opacity duration-300", eqOpen ? "opacity-100" : "opacity-0")} onClose={() => setEqOpen(false)} />
+        </aside>
         {/* IMPORTANT : largeur adaptée au contenu (libellés plus longs en anglais), bornée pour ne pas manger la place du contenu. */}
-        <nav className={cn("flex shrink-0 flex-col gap-1 border-r p-2 transition-[width] duration-300", navCollapsed ? "w-14 items-center" : "w-56")}>
+        <nav className={cn("flex shrink-0 flex-col gap-1 border-r p-0 transition-[width] duration-300", navCollapsed ? "w-14 items-start" : "w-56")}>
           {NAV.map(({ view: v, icon: Icon, label }) => {
             const isActive = (view === "playlist" ? "playlists" : view) === v;
             const count = v === "queue" ? p.items.length : 0;
@@ -421,8 +457,8 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
                 aria-current={isActive ? "page" : undefined}
                 aria-label={t(label)}
                 title={t(label)}
-                // IMPORTANT : suffixe ! (important) car le Button ne fusionne pas les classes qui se contredisent ; sélection = teinte d'accent + trait à gauche.
-                className={cn("relative text-base text-muted-foreground", navCollapsed ? "size-10 justify-center px-0" : "w-full justify-start gap-2 whitespace-nowrap px-3", isActive && "bg-primary/15! text-foreground! shadow-[inset_2px_0_0_var(--color-primary)] hover:bg-primary/20! [&_svg]:text-primary")}
+                // IMPORTANT : suffixe ! (important) car le Button ne fusionne pas les classes qui se contredisent ; sélection = aucune teinte de fond, seulement un trait épais à gauche.
+                className={cn("relative text-base text-muted-foreground", navCollapsed ? "h-10 w-full justify-center px-0" : "w-full justify-start gap-2 whitespace-nowrap px-3", isActive && "rounded-l-none bg-transparent! text-foreground! shadow-[inset_4px_0_0_var(--color-primary)] hover:bg-transparent! [&_svg]:text-foreground")}
                 onClick={() => setView(v)}
               >
                 <Icon />
@@ -433,7 +469,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
               </Button>
             );
           })}
-          <Button variant="ghost" size={navCollapsed ? "icon" : "default"} className={cn("mt-auto text-muted-foreground", navCollapsed ? "size-10" : "w-full justify-start gap-2 px-3 text-base")} onClick={() => setNavCollapsed((c) => !c)} title={navCollapsed ? t("nav.expand") : t("nav.collapse")} aria-expanded={!navCollapsed}>
+          <Button variant="ghost" size={navCollapsed ? "icon" : "default"} className={cn("mt-auto text-muted-foreground", navCollapsed ? "h-10 w-full" : "w-full justify-start gap-2 px-3 text-base")} onClick={() => setNavCollapsed((c) => !c)} title={navCollapsed ? t("nav.expand") : t("nav.collapse")} aria-expanded={!navCollapsed}>
             {navCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
             {!navCollapsed && <span className="truncate">{t("nav.collapse")}</span>}
           </Button>
@@ -441,7 +477,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
 
         <ScrollArea className={cn("min-w-0 flex-1", isVideo && "max-w-[45%] border-r")}>
           {showSearchBar && (
-            <form onSubmit={submitSearch} className="sticky top-0 z-10 flex gap-2 border-b bg-background/90 p-3 backdrop-blur">
+            <form ref={setSearchEl} onSubmit={submitSearch} className="sticky top-0 z-10 flex gap-2 border-b bg-background/90 p-3 backdrop-blur">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input className="pl-9" placeholder={t("on.searchPlaceholder")} value={searchText} onChange={(e) => setSearchText(e.target.value)} />
@@ -459,7 +495,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
             {notes && (
               // IMPORTANT : pleine largeur sur tous les écrans, y compris upload et compte dont le formulaire est centré dans une colonne étroite.
               <div className="space-y-2">
-                <InfoNote>{boldMarkup(t(notes.note))}</InfoNote>
+                <InfoNote id={view}>{boldMarkup(t(notes.note))}</InfoNote>
                 {notes.warning && <InfoNote tone="warning">{boldMarkup(t(notes.warning))}</InfoNote>}
               </div>
             )}
@@ -472,14 +508,18 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
 
         {/* Paroles : volet latéral, synchronisé avec la lecture */}
         {lyricsOpen && (
-          <aside className="w-80 shrink-0 border-l">
+          <aside className="w-[30rem] shrink-0 border-l">
             <LyricsPanel
               className="h-full"
+              // Hauteur MESURÉE de la barre de recherche voisine : les deux traits du bas s'alignent quelle que soit la taille réelle.
+              headerHeight={showSearchBar ? searchBarH : undefined}
               lyrics={lyrics.lyrics}
               loading={lyrics.loading}
               hasTrack={Boolean(p.current)}
               time={p.time}
               onSeek={p.seek}
+              onSearchOnline={lyrics.searchOnline}
+              source={lyrics.source}
               onClose={() => setLyricsOpen(false)}
               onEdit={() => p.current?.remoteId && setEditId(p.current.remoteId)}
             />
@@ -495,6 +535,8 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
         onShowShortcuts={() => flash("Space · N / P · F · ← / →")}
         onOpenVisualizer={() => setVisualizerOpen(true)}
         lyricsOpen={lyricsOpen}
+        eqOpen={eqOpen}
+        onToggleEq={() => setEqOpen((o) => !o)}
         social={p.current?.remoteId ? { data: social.social, onReact: (k) => void social.react(k), onOpenComments: () => setDetailId(p.current?.remoteId ?? null) } : undefined}
         onToggleLyrics={() => setLyricsOpen((o) => !o)}
       />

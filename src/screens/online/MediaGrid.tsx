@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { Download, Film, Info, ListMusic, ListPlus, MoreVertical, Music, Pencil, Play, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { ChevronLeft, ChevronRight, Download, Film, Info, ListMusic, ListPlus, MoreVertical, Music, Pencil, Play, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Menubar, MenubarContent, MenubarItem, MenubarMenu, MenubarSeparator, MenubarTrigger } from "@/components/ui/menubar";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -88,37 +88,40 @@ export function MediaCardOnline({ media, active, onPlay, ...actions }: ItemProps
   const ref = useRef<HTMLDivElement>(null);
   const meta = useLazyMeta(ref, mediaId(media));
   return (
-    <div ref={ref} className="group relative min-w-0" onDoubleClick={() => onPlay(media)}>
-      <div className={cn("relative aspect-square overflow-hidden rounded-xl bg-muted shadow-sm transition-shadow group-hover:shadow-lg", active && "ring-2 ring-primary")}>
-        <Jacket meta={meta} className="size-full" iconClass="size-12" />
-        <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[0.7rem] tabular-nums text-white">{formatTime(parseDuration(media.duration))}</span>
-        {meta && <span className="absolute bottom-2 right-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[0.7rem] text-white">{meta.isVideo ? "Video" : "Audio"}</span>}
-        <div className="absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition-all focus-within:bg-black/30 focus-within:opacity-100 group-hover:bg-black/30 group-hover:opacity-100">
-          <Button size="icon" className="size-12 rounded-full bg-white text-black hover:bg-white/90 [&_svg]:size-6" onClick={() => onPlay(media)} title={t("card.play")}><Play /></Button>
-        </div>
+    // Carte « tuile » : fond qui apparaît au survol, pochette qui zoome légèrement, bouton lecture rond en bas à droite.
+    <div ref={ref} className="group relative min-w-0 rounded-2xl p-2 transition-colors hover:bg-accent/50 focus-within:bg-accent/50" onDoubleClick={() => onPlay(media)}>
+      <div className={cn("relative aspect-square overflow-hidden rounded-xl bg-muted shadow-md transition-shadow group-hover:shadow-xl", active && "ring-2 ring-primary ring-offset-2 ring-offset-background")}>
+        <Jacket meta={meta} className="size-full transition-transform duration-500 group-hover:scale-105" iconClass="size-12" />
+        {/* Voile dégradé : n'assombrit que le bas, là où se trouvent la durée et le bouton lecture. */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-70 transition-opacity group-hover:opacity-100" />
+        <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[0.7rem] tabular-nums text-white backdrop-blur-sm">
+          {meta?.isVideo ? <Film className="size-3" /> : <Music className="size-3" />}{formatTime(parseDuration(media.duration))}
+        </span>
+        <Button size="icon" className="absolute bottom-2 right-2 size-10 translate-y-2 rounded-full opacity-0 shadow-lg transition-all group-hover:translate-y-0 group-hover:opacity-100 focus-visible:translate-y-0 focus-visible:opacity-100 [&_svg]:size-5" onClick={() => onPlay(media)} title={t("card.play")}><Play className="fill-current" /></Button>
         <div className="absolute right-1.5 top-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <MoreMenu media={media} {...actions} triggerClass="bg-background/80" />
+          <MoreMenu media={media} {...actions} triggerClass="bg-black/45 text-white backdrop-blur-sm hover:bg-black/65" />
         </div>
       </div>
-      <h3 className="mt-2 truncate text-sm font-medium" title={media.title}>{media.title}</h3>
+      <h3 className={cn("mt-2.5 truncate text-sm font-semibold", active && "text-primary")} title={media.title}>{media.title}</h3>
       <p className="truncate text-xs text-muted-foreground">{media.artist || "---"}</p>
     </div>
   );
 }
 
 /** Ligne de la liste riche : miniature, titre, artiste et taille, durée, et actions directes (pas de menu à ouvrir pour les courantes). */
-export function MediaRowOnline({ media, active, onPlay, ...actions }: ItemProps) {
+export function MediaRowOnline({ media, active, onPlay, index, ...actions }: ItemProps & { index?: number }) {
   const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   const meta = useLazyMeta(ref, mediaId(media));
   return (
-    <div ref={ref} className={cn("group flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-accent/60", active && "bg-primary/10 shadow-[inset_2px_0_0_var(--color-primary)]")} onDoubleClick={() => onPlay(media)}>
-      <button type="button" aria-label={t("card.play")} onClick={() => onPlay(media)} className="relative size-11 shrink-0 overflow-hidden rounded-md">
+    <div ref={ref} className={cn("group flex items-center gap-4 rounded-xl px-3 py-2 transition-colors hover:bg-accent/60", active && "bg-primary/10")} onDoubleClick={() => onPlay(media)}>
+      {index !== undefined && <span className={cn("w-6 shrink-0 text-center text-sm tabular-nums", active ? "font-semibold text-primary" : "text-muted-foreground")}>{index}</span>}
+      <button type="button" aria-label={t("card.play")} onClick={() => onPlay(media)} className="relative size-12 shrink-0 overflow-hidden rounded-lg shadow-sm">
         <Jacket meta={meta} className="size-full" iconClass="size-5" />
         <span className={cn("absolute inset-0 grid place-items-center bg-black/45 text-white transition-opacity", active ? "opacity-100" : "opacity-0 group-hover:opacity-100")}><Play className="size-4" /></span>
       </button>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium" title={media.title}>{media.title}</p>
+        <p className={cn("truncate text-sm font-semibold", active && "text-primary")} title={media.title}>{media.title}</p>
         <p className="truncate text-xs text-muted-foreground">{media.artist || "---"} · {formatSize(media.size ?? 0)}</p>
       </div>
       <span className="shrink-0 text-sm tabular-nums text-muted-foreground">{formatTime(parseDuration(media.duration))}</span>
@@ -132,13 +135,123 @@ export function MediaRowOnline({ media, active, onPlay, ...actions }: ItemProps)
   );
 }
 
-type GridProps = CardActions & { items: ServerMedia[]; currentRemoteId?: string; className?: string; refreshToken?: number; view?: MediaView };
+/** Pochette du coverflow : charge sa méta à la demande et remonte l'URL de la pochette au bandeau (fond flouté) sans la redemander. */
+function CoverFlowCard({ media, offset, onSelect, onPlay, onJacket }: { media: ServerMedia; offset: number; onSelect: () => void; onPlay: () => void; onJacket: (id: string, url: string) => void }) {
+  const { t } = useI18n();
+  const ref = useRef<HTMLDivElement>(null);
+  const id = mediaId(media);
+  const meta = useLazyMeta(ref, id);
+  useEffect(() => { if (meta?.jacket) onJacket(id, meta.jacket); }, [meta, id, onJacket]);
+  const abs = Math.abs(offset);
+  const visible = abs <= 2;
+  return (
+    <div ref={ref} className="absolute left-1/2 top-1/2 size-40 transition-all duration-500 ease-out sm:size-44"
+      style={{
+        transform: `translate(-50%, -50%) translateX(${offset * 70}px) rotateY(${-Math.sign(offset) * Math.min(abs, 1) * 38}deg) scale(${1 - abs * 0.14})`,
+        zIndex: 10 - abs, opacity: visible ? 1 - abs * 0.25 : 0, pointerEvents: visible ? "auto" : "none",
+      }}>
+      <button type="button" tabIndex={visible ? 0 : -1} onClick={offset === 0 ? onPlay : onSelect} aria-label={offset === 0 ? t("card.play") : media.title}
+        className="group/cf relative block size-full overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/10">
+        <Jacket meta={meta} className="size-full" iconClass="size-14" />
+        {offset === 0 && <span className="absolute inset-0 grid place-items-center bg-black/0 text-white opacity-0 transition-all group-hover/cf:bg-black/35 group-hover/cf:opacity-100"><Play className="size-10 fill-current" /></span>}
+      </button>
+    </div>
+  );
+}
+
+const HERO_INTERVAL = 6000;
+
+/**
+ * Bandeau « à la une » coupé en deux : à gauche le média courant, à droite un coverflow des dernières nouveautés.
+ * Défilement manuel (flèches, clic sur une pochette, points) ET automatique ; l'automatique s'arrête au survol/focus
+ * et si l'utilisateur préfère moins d'animations.
+ */
+export function HomeHero({ items, onPlay, onQueue, onDetails, onRefresh }: { items: ServerMedia[]; onRefresh?: () => void } & Pick<CardActions, "onPlay" | "onQueue" | "onDetails">) {
+  const { t } = useI18n();
+  const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [jackets, setJackets] = useState<Record<string, string>>({});
+  const n = items.length;
+  const current = items[Math.min(index, n - 1)];
+
+  const onJacket = useCallback((id: string, url: string) => setJackets((j) => (j[id] === url ? j : { ...j, [id]: url })), []);
+  const go = useCallback((dir: 1 | -1) => setIndex((i) => (i + dir + n) % n), [n]);
+
+  useEffect(() => {
+    if (n < 2 || paused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const timer = setInterval(() => go(1), HERO_INTERVAL);
+    return () => clearInterval(timer);
+  }, [n, paused, go, index]);
+
+  if (!current) return null;
+  const bg = jackets[mediaId(current)];
+  const arrow = "absolute top-1/2 z-20 size-9 -translate-y-1/2 rounded-full bg-black/40 text-white backdrop-blur-sm hover:bg-black/60";
+
+  return (
+    // IMPORTANT : `isolate` crée un contexte d'empilement propre au bandeau ; sans lui, les z-10/z-20 internes (coverflow, flèches, actualiser) passent au-dessus de la barre de recherche collante quand on défile.
+    <section className="relative isolate overflow-hidden rounded-2xl bg-muted/40" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}>
+      {/* IMPORTANT : image décorative floutée, hors accessibilité ; le voile garde le texte lisible quelle que soit la pochette. */}
+      {bg && <img src={bg} alt="" aria-hidden="true" className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-35 blur-3xl transition-opacity duration-700" />}
+      <div className="absolute inset-0 bg-gradient-to-r from-background/80 via-background/40 to-transparent" />
+      <div className="relative grid items-center gap-4 p-6 sm:p-8 md:grid-cols-2">
+        <div className="min-w-0 space-y-3 text-center md:text-left">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-1 text-xs font-medium text-primary"><Sparkles className="size-3.5" /> {t("home.featured")}</span>
+          <h2 className="line-clamp-2 text-3xl font-bold tracking-tight" title={current.title}>{current.title}</h2>
+          <p className="truncate text-muted-foreground">{[current.artist, formatTime(parseDuration(current.duration))].filter(Boolean).join(" · ")}</p>
+          <div className="flex flex-wrap justify-center gap-2 md:justify-start">
+            <Button className="rounded-full" onClick={() => onPlay(current)}><Play className="fill-current" /> {t("card.play")}</Button>
+            <Button variant="secondary" className="rounded-full" onClick={() => onQueue(current)}><ListPlus /> {t("card.queue")}</Button>
+            <Button variant="ghost" className="rounded-full" onClick={() => onDetails(current)}><Info /> {t("card.details")}</Button>
+          </div>
+        </div>
+
+        <div className="relative mx-auto h-56 w-full max-w-md [perspective:900px]">
+          {items.map((m, i) => {
+            const d = (((i - index) % n) + n) % n;
+            return <CoverFlowCard key={mediaId(m)} media={m} offset={d > n / 2 ? d - n : d} onSelect={() => setIndex(i)} onPlay={() => onPlay(m)} onJacket={onJacket} />;
+          })}
+          {n > 1 && (
+            <>
+              <Button size="icon" variant="ghost" className={cn(arrow, "left-0")} onClick={() => go(-1)} aria-label="←"><ChevronLeft /></Button>
+              <Button size="icon" variant="ghost" className={cn(arrow, "right-0")} onClick={() => go(1)} aria-label="→"><ChevronRight /></Button>
+              <div className="absolute inset-x-0 bottom-0 z-20 flex justify-center gap-1.5">
+                {items.map((m, i) => <button key={mediaId(m)} type="button" onClick={() => setIndex(i)} aria-label={m.title} aria-current={i === index} className={cn("h-1.5 rounded-full transition-all", i === index ? "w-5 bg-primary" : "w-1.5 bg-foreground/30 hover:bg-foreground/50")} />)}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      {onRefresh && <Button size="icon" variant="ghost" className="absolute right-3 top-3 z-20 size-8 rounded-full" onClick={onRefresh} title={t("on.refresh")} aria-label={t("on.refresh")}><RefreshCw /></Button>}
+    </section>
+  );
+}
+
+/** Rangée horizontale de grandes pochettes avec flèches (visibles au survol de la rangée). */
+export function MediaCarousel({ items, currentRemoteId, refreshToken = 0, ...actions }: CardActions & { items: ServerMedia[]; currentRemoteId?: string; refreshToken?: number }) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const scroll = (dir: 1 | -1) => viewport.current?.scrollBy({ left: dir * viewport.current.clientWidth * 0.8, behavior: "smooth" });
+  const arrow = "absolute top-[38%] z-10 size-9 -translate-y-1/2 rounded-full opacity-0 shadow-lg transition-opacity group-hover/car:opacity-100 focus-visible:opacity-100";
+  return (
+    <div className="group/car relative">
+      {/* IMPORTANT : gouttières latérales (px-12) réservées aux flèches, pour qu'elles ne recouvrent ni la première ni la dernière carte. */}
+      <ScrollArea className="mx-12 w-auto" viewportRef={viewport}>
+        <div className="flex w-max gap-3 pb-4">
+          {items.map((m) => <div key={`${mediaId(m)}:${refreshToken}`} className="w-44 shrink-0"><MediaCardOnline media={m} active={currentRemoteId === mediaId(m)} {...actions} /></div>)}
+        </div>
+      </ScrollArea>
+      <Button size="icon" variant="secondary" className={cn(arrow, "left-0")} onClick={() => scroll(-1)} aria-label="←"><ChevronLeft /></Button>
+      <Button size="icon" variant="secondary" className={cn(arrow, "right-0")} onClick={() => scroll(1)} aria-label="→"><ChevronRight /></Button>
+    </div>
+  );
+}
+
+type GridProps = CardActions & { items: ServerMedia[]; currentRemoteId?: string; className?: string; refreshToken?: number; view?: MediaView; /** Numérote les lignes (vue liste). */ numbered?: boolean };
 
 /** Liste de médias dans la présentation choisie. `refreshToken` force le rechargement des pochettes après une édition. */
-export function MediaGrid({ items, currentRemoteId, className, refreshToken = 0, view = "cards", ...actions }: GridProps) {
+export function MediaGrid({ items, currentRemoteId, className, refreshToken = 0, view = "cards", numbered = false, ...actions }: GridProps) {
   const key = (m: ServerMedia) => `${mediaId(m)}:${refreshToken}`;
   if (view === "rows") {
-    return <div className={cn("space-y-0.5", className)}>{items.map((m) => <MediaRowOnline key={key(m)} media={m} active={currentRemoteId === mediaId(m)} {...actions} />)}</div>;
+    return <div className={cn("space-y-0.5", className)}>{items.map((m, i) => <MediaRowOnline key={key(m)} media={m} index={numbered ? i + 1 : undefined} active={currentRemoteId === mediaId(m)} {...actions} />)}</div>;
   }
   if (view === "shelves") {
     // Étagère : une seule rangée qui défile horizontalement ; la hauteur est celle des cartes, pas du conteneur.
