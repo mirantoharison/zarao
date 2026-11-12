@@ -1,4 +1,4 @@
-import { open as openFile, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { open as openFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { parseBlob } from "music-metadata";
 
 /** Une ligne de paroles ; `time` (secondes) vaut null pour un texte non synchronisé. */
@@ -109,30 +109,68 @@ async function readEmbedded(path: string): Promise<string | null> {
   }
 }
 
+// ---------- Paroles locales : tag du fichier, mémoire de l'application, ancien fichier voisin ----------
+
+const STORE_KEY = "zarao.lyrics.v1";
+/** Nombre maximal d'entrées gardées dans la mémoire de l'application (les plus anciennes sont oubliées). */
+const STORE_MAX = 300;
+
+/** chemin du média -> texte ; "" = paroles effacées volontairement (pas de récupération automatique, ancien .lrc ignoré). */
+function readStore(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}") as Record<string, string>; } catch { return {}; }
+}
+function writeStore(store: Record<string, string>): void {
+  const keys = Object.keys(store);
+  for (const k of keys.slice(0, Math.max(0, keys.length - STORE_MAX))) delete store[k];
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch { /* quota atteint : non bloquant */ }
+}
+
+/** Entrée mémorisée pour ce média : undefined = aucune décision enregistrée. */
+export function storedLyrics(path: string): string | undefined { return readStore()[path]; }
+
+/** Mémorise (texte, ou "" pour « effacé ») ; `undefined` oublie l'entrée. Rien n'est écrit sur le disque. */
+export function setStoredLyrics(path: string, text: string | undefined): void {
+  const store = readStore();
+  delete store[path]; // remis en fin d'objet : l'ordre d'insertion sert à oublier les plus anciennes
+  if (text !== undefined) store[path] = text;
+  writeStore(store);
+}
+
 /**
- * Paroles d'un fichier local : fichier voisin `<nom>.lrc` (prioritaire, synchronisé), puis `<nom>.txt`,
- * puis paroles intégrées au fichier audio.
+ * Paroles d'un fichier local, par ordre de priorité :
+ *  1. le tag intégré au fichier (source de vérité, c'est là que l'application enregistre) ;
+ *  2. la mémoire de l'application (paroles récupérées en ligne, ou formats sans tag de paroles) ;
+ *  3. un ancien fichier voisin `<nom>.lrc` puis `<nom>.txt`, lu seulement (jamais écrit ni supprimé).
+ * Une entrée mémorisée vide (« effacé ») masque l'ancien fichier voisin.
  */
 export async function loadLocalLyricsText(path: string): Promise<string | null> {
+  const embedded = await readEmbedded(path);
+  if (embedded) return embedded;
+  const stored = storedLyrics(path);
+  if (stored !== undefined) return stored || null;
   for (const ext of SIDECAR_EXT) {
     const text = await readIfAny(`${baseOf(path)}.${ext}`);
     if (text) return text;
   }
-  return readEmbedded(path);
+  return null;
 }
 
 /**
- * Enregistre les paroles à côté du fichier : `.lrc` si elles sont horodatées, `.txt` sinon.
- * IMPORTANT : on n'écrit jamais dans le fichier audio (aucune réécriture ni risque pour la musique), et on ne supprime rien :
- * pour effacer des paroles, on écrit un fichier vide (ignoré à la lecture) plutôt que d'ouvrir une permission de suppression.
+ * Enregistre les paroles dans la mémoire de l'application (repli : format sans tag de paroles, ou paroles récupérées en ligne
+ * qu'on ne veut pas écrire dans le fichier sans que l'utilisateur l'ait demandé).
+ * IMPORTANT : aucun fichier de paroles n'est écrit sur le disque.
  */
 export async function saveLocalLyricsText(path: string, text: string): Promise<void> {
-  const synced = parseLyrics(text).synced;
-  const ext = synced ? "lrc" : "txt";
-  await writeTextFile(`${baseOf(path)}.${ext}`, text);
-  // L'autre extension, si elle existait avec du contenu, masquerait la nouvelle version : on la vide.
-  const other = SIDECAR_EXT.find((e) => e !== ext)!;
-  if (await readIfAny(`${baseOf(path)}.${other}`)) await writeTextFile(`${baseOf(path)}.${other}`, "");
+  setStoredLyrics(path, text);
+}
+
+/** Une décision existe-t-elle déjà pour ce média (paroles mémorisées, même vides, ou ancien fichier voisin) ? Évite de relancer la récupération automatique après un effacement. */
+export async function hasLyricsSidecar(path: string): Promise<boolean> {
+  if (storedLyrics(path) !== undefined) return true;
+  for (const ext of SIDECAR_EXT) {
+    try { await readTextFile(`${baseOf(path)}.${ext}`); return true; } catch { /* absent */ }
+  }
+  return false;
 }
 
 // ---------- Mise en forme des paroles non synchronisées ----------
@@ -166,3 +204,44 @@ export function structureLyrics(lines: LyricLine[]): LyricsSection[] {
   flush();
   return sections;
 }
+
+// ---------- Récupération en ligne (LRCLIB) ----------
+
+const LRCLIB_URL = "https://lrclib.net/api/search";
+/** Tolérance sur la durée (s) : les versions d'un même titre (single, album, remaster) diffèrent de quelques secondes. */
+const DURATION_TOLERANCE = 4;
+type LrclibHit = { trackName?: string; artistName?: string; duration?: number; instrumental?: boolean; plainLyrics?: string | null; syncedLyrics?: string | null };
+/** Recherches sans résultat, pour ne pas réinterroger le service à chaque changement de piste. */
+const misses = new Set<string>();
+
+async function searchLrclib(params: Record<string, string>): Promise<LrclibHit[]> {
+  const res = await fetch(`${LRCLIB_URL}?${new URLSearchParams(params)}`, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`LRCLIB ${res.status}`);
+  return (await res.json()) as LrclibHit[];
+}
+
+/**
+ * Cherche les paroles d'un titre sur LRCLIB (gratuit, sans clé). Renvoie du LRC synchronisé si disponible, sinon du texte brut.
+ * `duration` (s, 0 = inconnue) départage les versions d'un même titre. null = introuvable ou service injoignable.
+ * IMPORTANT : un échec réseau n'est pas mémorisé (le service peut revenir) ; seule une réponse vide l'est.
+ */
+export async function fetchOnlineLyrics(artist: string, title: string, duration = 0): Promise<string | null> {
+  const key = `${artist}\0${title}`.toLowerCase();
+  if (!artist.trim() || !title.trim() || misses.has(key)) return null;
+  try {
+    let hits = await searchLrclib({ artist_name: artist, track_name: title });
+    if (hits.length === 0) hits = await searchLrclib({ q: `${artist} ${title}` });
+    const usable = hits.filter((h) => !h.instrumental && (h.syncedLyrics?.trim() || h.plainLyrics?.trim()));
+    if (usable.length === 0) { misses.add(key); return null; }
+    // Meilleur candidat : paroles synchronisées d'abord, puis durée la plus proche (si connue).
+    const gap = (h: LrclibHit) => (duration > 0 && h.duration ? Math.abs(h.duration - duration) : 0);
+    const close = duration > 0 ? usable.filter((h) => gap(h) <= DURATION_TOLERANCE) : usable;
+    const pool = close.length ? close : usable;
+    pool.sort((a, b) => Number(Boolean(b.syncedLyrics?.trim())) - Number(Boolean(a.syncedLyrics?.trim())) || gap(a) - gap(b));
+    return (pool[0].syncedLyrics?.trim() ? pool[0].syncedLyrics : pool[0].plainLyrics) ?? null;
+  } catch (err) {
+    console.warn("[zarao] paroles en ligne indisponibles :", err);
+    return null;
+  }
+}
+

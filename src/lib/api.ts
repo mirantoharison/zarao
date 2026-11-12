@@ -241,7 +241,7 @@ export const invalidateMeta = (id: string) => { metaCache.delete(id); };
 export type TagWriteResult = { saved: boolean; path?: string; error?: string; detail?: string };
 
 /** Écrit les tags d'un fichier local (FFmpeg côté serveur). `jacket` : undefined = conserver, null = retirer, data URL = remplacer. */
-export async function writeLocalTags(body: { path: string; tags: Record<string, string>; jacket?: string | null; id3v1?: boolean; newName?: string }): Promise<TagWriteResult> {
+export async function writeLocalTags(body: { path: string; tags: Record<string, string>; jacket?: string | null; id3v1?: boolean; newName?: string; lyrics?: string }): Promise<TagWriteResult> {
   const r = await fetch(`${API_BASE}/tags/write`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return (await r.json()) as TagWriteResult;
 }

@@ -19,6 +19,7 @@ import multer from "multer";
 import bcrypt from "bcrypt";
 import Database from "better-sqlite3";
 import { parseFile } from "music-metadata";
+import { writeMp3Lyrics } from "./id3-lyrics.mjs";
 import { availableVideoEncoders, buildPlayArgs, buildTagArgs, parseEncoderList } from "./ffmpeg-args.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -721,6 +722,13 @@ app.put("/settings", h(async (req, res) => {
 }));
 
 // ---- Métadonnées ----
+/**
+ * Paroles intégrées au fichier : formats où ffmpeg écrit réellement le tag `lyrics` (USLT en MP3, ©lyr en MP4/M4A, LYRICS en Vorbis/Matroska).
+ * IMPORTANT : sur les autres (WAV, AVI…) ffmpeg ignore le tag sans erreur ; on refuse plutôt que de perdre les paroles en silence.
+ */
+const LYRICS_EMBED_EXT_RE = /\.(mp3|m4a|mp4|m4v|flac|ogg|oga|opus|mkv|webm)$/i;
+/** Plafond des paroles passées en argument : la ligne de commande Windows est limitée à ~32 000 caractères. */
+const MAX_EMBED_LYRICS = 12_000;
 const TAG_KEYS = ["title", "artist", "album", "album_artist", "composer", "genre", "date", "track", "disc", "publisher", "copyright"];
 const MEDIA_EXT_RE = /\.(mp3|mp2|wav|ogg|flac|m4a|aac|mp4|webm|mpg|mkv|avi|ts|mov)$/i;
 const VIDEO_EXT_RE = /\.(mp4|webm|mpg|mkv|avi|ts|mov)$/i;
@@ -757,11 +765,19 @@ function decodeJacket(dataUrl) {
  * `jacket` : absent = conserver, null = retirer, data URL = remplacer (audio seulement).
  */
 app.post("/tags/write", h(async (req, res) => {
-	const { path: file, tags, jacket, id3v1, newName } = req.body ?? {};
+	const { path: file, tags, jacket, id3v1, newName, lyrics } = req.body ?? {};
 	if (typeof file !== "string" || !path.isAbsolute(file) || !MEDIA_EXT_RE.test(file)) return res.json({ saved: false, error: "path" });
 	let stat;
 	try { stat = fs.statSync(file); } catch { return res.json({ saved: false, error: "missing" }); }
 	if (!stat.isFile()) return res.json({ saved: false, error: "missing" });
+
+	// Paroles : undefined = conserver, "" = retirer, texte = remplacer (LRC horodaté conservé tel quel).
+	let lyricsText;
+	if (typeof lyrics === "string") {
+		if (!LYRICS_EMBED_EXT_RE.test(file)) return res.json({ saved: false, error: "lyricsFormat" });
+		lyricsText = lyrics.replace(/\r\n?/g, "\n");
+		if (lyricsText.length > MAX_EMBED_LYRICS) return res.json({ saved: false, error: "lyricsTooLong" });
+	}
 
 	const dir = path.dirname(file);
 	const ext = path.extname(file);
@@ -785,7 +801,8 @@ app.post("/tags/write", h(async (req, res) => {
 	}
 
 	const tmp = path.join(dir, `.${path.basename(file, ext)}.zarao-tmp${ext}`);
-	const args = buildTagArgs({ file, tmp, coverFile, jacket, isVideo, isMp3: /\.mp3$/i.test(file), id3v1, tags: cleanTags(tags) });
+	const isMp3 = /\.mp3$/i.test(file);
+	const args = buildTagArgs({ file, tmp, coverFile, jacket, isVideo, isMp3, id3v1, tags: { ...cleanTags(tags), ...(lyricsText !== undefined && !isMp3 ? { lyrics: lyricsText } : {}) } });
 
 	const result = await new Promise((resolve) => {
 		const proc = spawn(getFfmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -797,6 +814,21 @@ app.post("/tags/write", h(async (req, res) => {
 	});
 	if (coverFile) fs.rmSync(coverFile, { force: true });
 	if (!result.ok) { fs.rmSync(tmp, { force: true }); return res.json({ saved: false, error: result.error, detail: result.detail }); }
+
+	// Paroles : MP3 = trame USLT injectée à la main ; les autres formats ont reçu le tag via ffmpeg.
+	// IMPORTANT : on relit le résultat avant de remplacer l'original. Un format dont ffmpeg ignore le tag sans erreur ne doit pas
+	// faire croire que les paroles sont enregistrées : on refuse (le client les range alors dans un .lrc voisin).
+	if (lyricsText !== undefined) {
+		let ok = true;
+		try {
+			if (isMp3) ok = writeMp3Lyrics(tmp, lyricsText);
+			if (ok && lyricsText) {
+				const meta = await parseFile(tmp, { duration: false, skipCovers: true });
+				ok = (meta.common.lyrics ?? []).some((l) => typeof l?.text === "string" && l.text.trim() !== "");
+			}
+		} catch { ok = false; }
+		if (!ok) { fs.rmSync(tmp, { force: true }); return res.json({ saved: false, error: "lyricsFormat" }); }
+	}
 
 	try {
 		// Remplacement sur le même volume : l'original n'est jamais laissé à moitié écrit.
