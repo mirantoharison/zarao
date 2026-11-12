@@ -51,11 +51,14 @@ function DialogContent({
   children,
   showCloseButton = true,
   scrollable = false,
+  bare = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
   /** Contenu long : le défilement passe par ScrollArea (limiter la hauteur via max-h-* dans className). */
   scrollable?: boolean
+  /** Coquille sans padding ni défilement : l'appelant gère en-tête / ScrollArea / pied. */
+  bare?: boolean
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
@@ -64,12 +67,12 @@ function DialogContent({
         data-slot="dialog-content"
         className={cn(
           "fixed top-[50%] left-[50%] z-50 w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] rounded-lg border bg-background shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
-          scrollable ? "flex flex-col overflow-hidden" : "grid gap-4 p-6",
+          bare || scrollable ? "flex flex-col overflow-hidden" : "grid gap-4 p-6",
           className
         )}
         {...props}
       >
-        {scrollable ? (
+        {bare ? children : scrollable ? (
           <ScrollArea className="min-h-0 flex-1"><div className="grid gap-4 p-6 [&>*]:min-w-0">{children}</div></ScrollArea>
         ) : children}
         {showCloseButton && (

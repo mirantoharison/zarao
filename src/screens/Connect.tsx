@@ -95,7 +95,7 @@ export function Connect({ onConnected, onBack, onRegister }: Props) {
             <div className="flex items-start gap-2">
               <Checkbox id="stay" className="mt-0.5" checked={stay} onCheckedChange={(v) => setStay(v === true)} />
               <div>
-                <Label htmlFor="stay" className="cursor-pointer text-xs">{t("conn.stay")}</Label>
+                <Label htmlFor="stay" className="cursor-pointer text-sm">{t("conn.stay")}</Label>
                 <p className="text-xs text-muted-foreground">{t("conn.stayHint")}</p>
               </div>
             </div>

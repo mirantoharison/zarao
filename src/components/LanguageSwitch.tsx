@@ -36,7 +36,7 @@ export function LanguageSwitch({ className }: { className?: string }) {
   const { lang, setLang, t } = useI18n();
   return (
     <Select value={lang} onValueChange={(v) => setLang(v as Lang)}>
-      <SelectTrigger className={cn("h-9 w-40 text-base", className)} aria-label={t("lang.label")} title={t("lang.label")}>
+      <SelectTrigger className={cn("w-40", className)} aria-label={t("lang.label")} title={t("lang.label")}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent align="end">
