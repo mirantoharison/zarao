@@ -1,12 +1,27 @@
+import { AudioVisualizer } from "@/components/AudioVisualizer";
+import { useVisualizerTheme } from "@/lib/visualizerTheme";
 import { PaletteMenuItems } from "@/components/PaletteMenuItems";
+import { RefreshMenuItem } from "@/components/RefreshMenuItem";
+import { EmptyState } from "@/components/EmptyState";
+import { BookmarksDialog } from "@/components/BookmarksDialog";
+import { DuplicatesDialog } from "@/components/DuplicatesDialog";
+import { SleepDialog } from "@/components/SleepDialog";
+import { AlarmClock, Bookmark, CopyCheck } from "lucide-react";
+import { ResumeBar } from "@/components/ResumeBar";
+import { MiniPlayer } from "@/components/MiniPlayer";
+import { PlaylistsDialog } from "@/components/PlaylistsDialog";
+import { QueueDialog } from "@/components/QueueDialog";
+import { enterMini, leaveMini } from "@/lib/miniPlayer";
+import { useTray } from "@/lib/tray";
+import { UnplayableDialog } from "@/components/UnplayableDialog";
 import { ZoomMenuItems } from "@/components/ZoomMenuItems";
-import { VideoStage, toggleVideoFullscreen } from "@/components/VideoStage";
+import { VideoStage, toggleVideoFullscreen, useFullscreenKindSwitch } from "@/components/VideoStage";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Download, Maximize, Tags, Settings, Heart, ChevronDown, ChevronUp, ListChecks, Pin, ArrowDown, ArrowLeftRight, ArrowUp, FileAudio, FilePlus, FolderOpen, ListPlus, LogOut, Save, Trash2, Volume1, FileVideo, GalleryVertical, Grid2x2, LayoutList, ListMusic, Music, Play, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, Disc3, GalleryHorizontal, MicVocal, ChevronLeft, ChevronRight, Rows3, Eraser, SlidersHorizontal, X, History, CaseSensitive, Regex, WholeWord } from "lucide-react";
+import { Copy, CornerDownRight, Crosshair, Clock, GripVertical, Shapes, Type, CircleAlert, Library, ListEnd, Minimize2, Download, Pencil, Maximize, Tags, Heart, ChevronDown, ChevronUp, ListChecks, Pin, ArrowDown, ArrowLeftRight, ArrowUp, FileAudio, FilePlus, FolderOpen, ListPlus, LogOut, Save, Trash2, Volume1, FileVideo, GalleryVertical, Grid2x2, LayoutList, ListMusic, Music, Play, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, Disc3, GalleryHorizontal, MicVocal, ChevronLeft, ChevronRight, Rows3, Eraser, SlidersHorizontal, X, History, CaseSensitive, Regex, WholeWord, Pause } from "lucide-react";
 import { PlayerBar, SEEK_STEP } from "@/components/PlayerBar";
 import { PlayingBars } from "@/components/PlayingBars";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +29,9 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextViewItems } from "@/components/ContextViewItems";
+import { readPlaylists, savePlaylistNamed, type SavedPlaylist } from "@/lib/playlists";
 import { Menubar, MenubarContent, MenubarItem, MenubarMenu, MenubarSeparator, MenubarShortcut, MenubarTrigger } from "@/components/ui/menubar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -22,8 +40,9 @@ import { usePlayer } from "@/hooks/usePlayer";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { audioExt, videoExt } from "@/lib/media";
 import { expandDropped, loadPlaylist, pickFiles, pickFolder, savePlaylist } from "@/lib/files";
-import { formatSize, formatTime, localUrl, type MediaItem } from "@/lib/media";
+import { formatSize, formatTime, localUrl, spectrumSourceOf, type MediaItem } from "@/lib/media";
 import { cn } from "@/lib/utils";
+import { centerInScroller } from "@/lib/scroll";
 import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { FullscreenPlayer } from "@/components/FullscreenPlayer";
 import { activeLine, type Lyrics } from "@/lib/lyrics";
@@ -31,6 +50,9 @@ import { LyricsPanel } from "@/components/LyricsPanel";
 import { EqualizerPanel } from "@/components/EqualizerPanel";
 import { MetadataDialog, type MetadataSaved, type MetadataSource } from "@/components/MetadataDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import type { SettingsSection } from "@/components/settings/sections";
+import { SettingsMenuItems } from "@/components/settings/SettingsMenuItems";
+import { useFolderWatch } from "@/hooks/useFolderWatch";
 import { tr, useI18n } from "@/i18n";
 
 type SortKey = "kind" | "artist" | "title" | "duration";
@@ -46,10 +68,10 @@ type Layout = "scene" | "strip";
 const FAV_KEY = "zarao.local.favorites";
 
 /** Raccourcis affichés dans la boîte d'aide (touches, clé de traduction du libellé). */
-const SHORTCUTS: [string, "kb.playPause" | "kb.nextPrev" | "kb.seek" | "kb.volume" | "kb.addFiles" | "kb.addFolder" | "kb.openPlaylist" | "kb.savePlaylist" | "kb.search" | "kb.quit"][] = [
+const SHORTCUTS: [string, "kb.playPause" | "kb.nextPrev" | "kb.seek" | "kb.volume" | "kb.addFiles" | "kb.addFolder" | "kb.openPlaylist" | "kb.savePlaylist" | "kb.search" | "kb.goto" | "kb.bookmarks" | "kb.back" | "kb.quit"][] = [
   ["Space", "kb.playPause"], ["N / P", "kb.nextPrev"], ["← / →", "kb.seek"],
   ["Ctrl + +  /  Ctrl + −", "kb.volume"], ["Ctrl + O", "kb.addFiles"], ["Ctrl + E", "kb.addFolder"],
-  ["Ctrl + P", "kb.openPlaylist"], ["Ctrl + S", "kb.savePlaylist"], ["Ctrl + F", "kb.search"], ["Ctrl + Alt + Q", "kb.quit"],
+  ["Ctrl + P", "kb.openPlaylist"], ["Ctrl + S", "kb.savePlaylist"], ["Ctrl + F", "kb.search"], ["Ctrl + G", "kb.goto"], ["Ctrl + B", "kb.bookmarks"], ["B", "kb.back"], ["Ctrl + Alt + Q", "kb.quit"],
 ];
 
 function readFavorites(): Set<string> {
@@ -77,9 +99,41 @@ function readHistory(): string[] {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]") as string[]; } catch { return []; }
 }
 
-export function LocalPlayer({ onBack }: { onBack: () => void }) {
+/** `onBack` absent = édition « local » : pas d'écran de choix de mode où revenir, l'entrée de menu est masquée. */
+export function LocalPlayer({ onBack }: { onBack?: () => void }) {
   const { t, lang } = useI18n();
-  const p = usePlayer();
+  const [message, setMessage] = useState<string | null>(null);
+  // Piste illisible sautée : on le dit un instant (le message s'efface seul, sauf s'il a été remplacé entre-temps).
+  const p = usePlayer({
+    onUnplayable: (item) => {
+      const text = t("msg.skipped", { n: item.title });
+      setMessage(text);
+      window.setTimeout(() => setMessage((m) => (m === text ? null : m)), 6000);
+    },
+  });
+  useTray(p);
+  // Mini-lecteur : petite fenêtre au premier plan (lib/miniPlayer.ts). L'écran compact s'affiche même si la fenêtre ne peut pas être réduite (hors Tauri).
+  const [mini, setMini] = useState(false);
+  const miniRef = useRef(false);
+  const setMiniMode = (on: boolean) => {
+    // Une vidéo ne se regarde pas dans le mini-lecteur : on n'y entre pas pendant une vidéo.
+    if (on && p.current?.kind === "video") return;
+    miniRef.current = on;
+    setMini(on);
+    // Classe sur <html> : plus aucune barre de défilement (la page dessous déborderait dans une si petite fenêtre), cf. index.css.
+    document.documentElement.classList.toggle("mini-mode", on);
+    void (on ? enterMini() : leaveMini()).catch(() => undefined);
+  };
+  // Une vidéo démarre pendant le mini-lecteur (piste suivante, clic dans le carrousel, touche) : retour forcé à la fenêtre normale.
+  useEffect(() => { if (mini && p.current?.kind === "video") setMiniMode(false); }, [mini, p.current?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Quitter l'écran du lecteur en mode mini : la fenêtre retrouve sa taille.
+  useEffect(() => () => {
+    document.documentElement.classList.remove("mini-mode");
+    if (miniRef.current) void leaveMini().catch(() => undefined);
+  }, []);
+  const [unplayableOpen, setUnplayableOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [playlistsOpen, setPlaylistsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 } | null>(null);
   const [query, setQuery] = useState("");
@@ -93,7 +147,8 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
   const [favorites, setFavorites] = useState<Set<string>>(readFavorites);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Page des Paramètres ouverte (null = fermé) : chaque page est une entrée du menu « Paramètres ».
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [visualizerOpen, setVisualizerOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [eqOpen, setEqOpen] = useState(false);
@@ -101,7 +156,6 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
   const [lyricsRefresh, setLyricsRefresh] = useState(0);
   const lyrics = useLyrics(p.current, lyricsRefresh);
   const [metaTarget, setMetaTarget] = useState<{ id: string; source: MetadataSource } | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list");
   const [layout, setLayout] = useState<Layout>(() => {
     // Les anciennes valeurs (library, grid, focus) retombent sur la scène.
@@ -115,6 +169,8 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
   // --- Dépôt de fichiers depuis l'explorateur ---
   // IMPORTANT : l'API HTML5 de drop ne reçoit pas les chemins disque dans Tauri ; seul l'événement natif du webview les fournit.
   const [dropActive, setDropActive] = useState(false);
+  // Nouveaux fichiers des dossiers surveillés : ajoutés à la liste de lecture (doublons écartés par addPaths).
+  useFolderWatch(p.addPaths);
   const addPathsRef = useRef(p.addPaths);
   addPathsRef.current = p.addPaths;
   useEffect(() => {
@@ -230,6 +286,88 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
   const reveal = () => { if (p.current) revealItemInDir(p.current.path).catch(() => setMessage(t("msg.revealFail"))); };
   const copyTitle = () => { if (p.current) void navigator.clipboard?.writeText(p.current.artist ? `${p.current.artist} - ${p.current.title}` : p.current.title); };
   const isFavorite = p.current ? favorites.has(p.current.path) : false;
+
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [sleepOpen, setSleepOpen] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
+
+  // --- Aller à… ---
+  const [gotoOpen, setGotoOpen] = useState(false);
+  const [gotoValue, setGotoValue] = useState("");
+  const [gotoError, setGotoError] = useState<string | null>(null);
+  const openGoto = () => { setGotoValue(""); setGotoError(null); setGotoOpen(true); };
+  /**
+   * Fait défiler la liste jusqu'à une piste et la sélectionne.
+   * IMPORTANT : la piste peut être masquée par la recherche ou le filtre « favoris » (on les lève), et le tiroir de la liste peut être
+   * fermé (on l'ouvre). Le défilement attend le rendu suivant ; il ne vise que le conteneur de la liste (cf. lib/scroll).
+   */
+  const revealTrack = (id: string) => {
+    if (!visible.some((i) => i.id === id)) { setQuery(""); setFavoritesOnly(false); }
+    setListOpen(true);
+    setSelected(new Set([id]));
+    window.setTimeout(() => {
+      const el = document.querySelector(`[data-track-id="${CSS.escape(id)}"]`);
+      const scroller = el?.closest<HTMLElement>("[data-radix-scroll-area-viewport]");
+      if (el && scroller) centerInScroller(scroller, el, "y");
+    }, 120);
+  };
+  const goToCurrent = () => { if (p.current) revealTrack(p.current.id); else setMessage(t("goto.noCurrent")); };
+  /** Sans accents ni majuscules : « edith » retrouve « Édith ». */
+  const fold = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  /** Interprète la saisie : n° de piste (« 42 » ou « #42 »), moment (« 3:25 », « 1:02:10 ») ou début de titre/artiste. Renvoie un message d'erreur, ou null si réussi. */
+  const runGoto = (raw: string): string | null => {
+    const input = raw.trim();
+    if (!input) return t("goto.errNone");
+    if (/^\d+(:\d{1,2}){1,2}$/.test(input)) {
+      if (!p.current) return t("goto.errNoCurrent");
+      const sec = input.split(":").map(Number).reduce((acc, n) => acc * 60 + n, 0);
+      if (p.duration && sec > p.duration) return t("goto.errTime", { d: formatTime(p.duration) });
+      p.seek(sec);
+      return null;
+    }
+    if (/^#?\d+$/.test(input)) {
+      // Numérotation de la colonne « # » : celle de la liste affichée (tri et recherche compris).
+      const n = Number(input.replace("#", ""));
+      if (n < 1 || n > visible.length) return t("goto.errRange", { max: visible.length });
+      revealTrack(visible[n - 1].id);
+      return null;
+    }
+    const q = fold(input);
+    const hit = (i: MediaItem) => fold(i.title).includes(q) || fold(i.artist ?? "").includes(q);
+    // Départ après la sélection actuelle : relancer la même saisie passe à l'occurrence suivante.
+    const from = visible.findIndex((i) => selected.has(i.id));
+    const ordered = [...visible.slice(from + 1), ...visible.slice(0, from + 1)];
+    const found = ordered.find(hit) ?? p.items.find(hit);
+    if (!found) return t("goto.errNone");
+    revealTrack(found.id);
+    return null;
+  };
+  const submitGoto = () => { const err = runGoto(gotoValue); setGotoError(err); if (!err) setGotoOpen(false); };
+
+  // --- Menu contextuel (clic droit) d'une piste ---
+  /** Piste sous le curseur au moment du clic droit (null = hors piste : aucun menu). */
+  const [ctxId, setCtxId] = useState<string | null>(null);
+  const ctxItem = ctxId ? p.items.find((i) => i.id === ctxId) ?? null : null;
+  /** Clic droit sur une piste cochée : l'action vaut pour toute la sélection ; sinon pour la seule piste visée. */
+  const ctxIds = ctxId ? (selected.has(ctxId) ? [...selected] : [ctxId]) : [];
+  /** Playlists enregistrées, relues à chaque ouverture du menu (une autre fenêtre a pu les modifier). */
+  const [playlistChoices, setPlaylistChoices] = useState<SavedPlaylist[]>([]);
+  /** Ajoute la piste visée (ou la sélection) à une playlist enregistrée, sans doublon. */
+  const addCtxToPlaylist = (l: SavedPlaylist) => {
+    const paths = p.items.filter((i) => ctxIds.includes(i.id)).map((i) => i.path);
+    savePlaylistNamed(l.name, [...l.paths, ...paths.filter((x) => !l.paths.includes(x))]);
+  };
+  /**
+   * Clic droit n'importe où dans l'écran. Phase de capture : décide AVANT le déclencheur Radix.
+   * IMPORTANT : champs de texte et fenêtres (portails React) -> stopPropagation sans preventDefault, donc le menu natif
+   * (Copier/Coller) reste disponible et Radix n'ouvre rien.
+   */
+  const onScreenContextMenu = (e: React.MouseEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    if (!e.currentTarget.contains(target) || target.closest("input, textarea, [contenteditable=true], [role=dialog]")) { e.stopPropagation(); return; }
+    setCtxId(target.closest<HTMLElement>("[data-track-id]")?.dataset.trackId ?? null);
+    setPlaylistChoices(readPlaylists());
+  };
   const clamp = (v: number) => Math.max(0, Math.min(1, v));
 
   const commitSearch = () => {
@@ -254,11 +392,15 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         else if (k === "p") { e.preventDefault(); void openPlaylistReplace(); }
         else if (k === "s") { e.preventDefault(); void save(); }
         else if (k === "f") { e.preventDefault(); setSearchOpen(true); }
+        else if (k === "g") { e.preventDefault(); openGoto(); }
+        else if (k === "b") { e.preventDefault(); setBookmarksOpen(true); }
         else if (e.key === "+" || e.key === "=") { e.preventDefault(); p.setVolume(clamp(p.volume + 0.05)); }
         else if (e.key === "-") { e.preventDefault(); p.setVolume(clamp(p.volume - 0.05)); }
       } else if (!e.ctrlKey && !e.altKey) {
         if (e.code === "Space") { e.preventDefault(); p.togglePlay(); }
         else if (e.key === "n") p.next();
+        else if (e.key === "b") p.goBack();
+        else if (e.key === "c") p.cycleSubtitles();
         else if (e.key === "f") openFullscreen();
         else if (e.key === "l") setLyricsOpen((o) => !o);
         else if (e.key === "ArrowLeft") { e.preventDefault(); p.seek(Math.max(0, p.time - SEEK_STEP)); }
@@ -275,9 +417,12 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
 
   const SortIcon = ({ k }: { k: SortKey }) => (sort?.key === k ? (sort.dir === 1 ? <ArrowUp className="ml-1 inline size-3" /> : <ArrowDown className="ml-1 inline size-3" />) : null);
   const isVideo = p.current?.kind === "video";
+  useFullscreenKindSwitch(p.current?.kind, visualizerOpen, setVisualizerOpen);
 
   return (
-    <div className="relative isolate flex h-screen flex-col">
+    <ContextMenu>
+    <ContextMenuTrigger asChild>
+    <div className="relative isolate flex h-screen flex-col" onContextMenuCapture={onScreenContextMenu}>
       <AmbientBackground playing={p.playing} />
       {/* Barre de menus (mêmes entrées que l'ancienne version) */}
       <header className="flex items-center gap-2 border-b py-1 pl-2 pr-6">
@@ -290,11 +435,12 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <MenubarItem onClick={openPlaylistReplace}><ListMusic /> {t("file.openPlaylist")} <MenubarShortcut>Ctrl + P</MenubarShortcut></MenubarItem>
               <MenubarItem onClick={() => addFrom(loadPlaylist)}><ListPlus /> {t("file.appendPlaylist")}</MenubarItem>
               <MenubarSeparator />
+              <MenubarItem onClick={() => setPlaylistsOpen(true)}><Library /> {t("mypl.menu")}</MenubarItem>
               <MenubarItem disabled={p.items.length === 0} onClick={save}><Save /> {t("file.saveAs")} <MenubarShortcut>Ctrl + S</MenubarShortcut></MenubarItem>
               <MenubarSeparator />
               <MenubarItem disabled={p.items.length === 0} onClick={dump}><Trash2 /> {t("file.dump")}</MenubarItem>
               <MenubarSeparator />
-              <MenubarItem onClick={onBack}><ArrowLeftRight /> {t("file.changeMode")}</MenubarItem>
+              {onBack && <MenubarItem onClick={onBack}><ArrowLeftRight /> {t("file.changeMode")}</MenubarItem>}
               <MenubarItem onClick={() => void getCurrentWindow().close()}><LogOut /> {t("file.quit")} <MenubarShortcut>Ctrl + Alt + Q</MenubarShortcut></MenubarItem>
             </MenubarContent>
           </MenubarMenu>
@@ -310,12 +456,15 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <MenubarItem onClick={() => p.setVolume(clamp(p.volume + 0.05))}><Volume2 /> {t("act.volUp")} <MenubarShortcut>Ctrl + +</MenubarShortcut></MenubarItem>
               <MenubarItem onClick={() => p.setVolume(clamp(p.volume - 0.05))}><Volume1 /> {t("act.volDown")} <MenubarShortcut>Ctrl + -</MenubarShortcut></MenubarItem>
               <MenubarItem onClick={p.toggleMute}><VolumeX /> {t("act.mute")}</MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem onClick={() => setQueueOpen(true)}><ListEnd /> {t("q.menu", { n: p.queue.length })}</MenubarItem>
+              <MenubarItem disabled={p.unplayable.length === 0} onClick={() => setUnplayableOpen(true)}><CircleAlert /> {t("unp.menu", { n: p.unplayable.length })}</MenubarItem>
             </MenubarContent>
           </MenubarMenu>
           <MenubarMenu>
             <MenubarTrigger>{t("menu.settings")}</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem onClick={() => setSettingsOpen(true)}><Settings /> {t("set.title")}…</MenubarItem>
+              <SettingsMenuItems onOpen={setSettingsSection} />
             </MenubarContent>
           </MenubarMenu>
           <MenubarMenu>
@@ -328,11 +477,19 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <MenubarItem onClick={() => setView("jackets")}><GalleryVertical /> {t("view.jackets")}</MenubarItem>
               <MenubarItem onClick={() => setView("rows")}><Rows3 /> {t("view.rows")}</MenubarItem>
               <MenubarSeparator />
+              <MenubarItem disabled={p.current?.kind === "video"} onClick={() => setMiniMode(true)}><Minimize2 /> {t("mini.open")}</MenubarItem>
               <MenubarItem onClick={() => setSearchOpen((o) => !o)}><Search /> {t("view.search")} <MenubarShortcut>Ctrl + F</MenubarShortcut></MenubarItem>
+              <MenubarItem onClick={openGoto}><CornerDownRight /> {t("goto.menu")} <MenubarShortcut>Ctrl + G</MenubarShortcut></MenubarItem>
+              <MenubarItem disabled={!p.current} onClick={goToCurrent}><Crosshair /> {t("goto.current")}</MenubarItem>
+              <MenubarItem disabled={!p.current} onClick={() => setBookmarksOpen(true)}><Bookmark /> {t("bm.title")} <MenubarShortcut>Ctrl + B</MenubarShortcut></MenubarItem>
+              <MenubarItem onClick={() => setSleepOpen(true)}><AlarmClock /> {t("slp.title")}</MenubarItem>
+              <MenubarItem onClick={() => setDupOpen(true)}><CopyCheck /> {t("dup.menu")}</MenubarItem>
               <MenubarSeparator />
               <ZoomMenuItems />
               <MenubarSeparator />
               <PaletteMenuItems />
+              <MenubarSeparator />
+              <RefreshMenuItem />
             </MenubarContent>
           </MenubarMenu>
         </Menubar>
@@ -343,12 +500,16 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <Button key={k} size="icon" variant={layout === k ? "secondary" : "ghost"} className="size-8" onClick={() => setLayout(k)} title={t(label)} aria-pressed={layout === k}><Icon /></Button>
             ))}
           </div>
-          <Button size="icon" variant={listOpen ? "secondary" : "ghost"} onClick={() => setListOpen((o) => !o)} title={t("list.toggle")} aria-pressed={listOpen}><ListMusic /></Button>
           <span className="mx-1 h-5 w-px bg-border" />
           <LanguageSwitch />
         </div>
       </header>
-      {message && <p className="border-b bg-destructive/10 px-3 py-1.5 text-sm text-destructive">{message}</p>}
+      {message && (
+        <div className="flex items-center gap-3 border-b bg-destructive/10 px-3 py-1.5 text-sm text-destructive">
+          <p className="min-w-0 flex-1">{message}</p>
+          {p.unplayable.length > 0 && <Button size="xs" variant="outline" onClick={() => setUnplayableOpen(true)}>{t("unp.view")}</Button>}
+        </div>
+      )}
 
       <main className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* Égaliseur : volet à gauche (premier enfant en flux ; la liste, elle, est superposée à droite). */}
@@ -370,11 +531,11 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
             <Select value={sort?.key ?? "manual"} onValueChange={(v) => setSort(v === "manual" ? null : { key: v as SortKey, dir: sort?.dir ?? 1 })}>
               <SelectTrigger className="w-36" title={t("tool.sort")}><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="manual">{t("sort.manual")}</SelectItem>
-                <SelectItem value="artist">{t("sort.artist")}</SelectItem>
-                <SelectItem value="title">{t("sort.title")}</SelectItem>
-                <SelectItem value="duration">{t("sort.duration")}</SelectItem>
-                <SelectItem value="kind">{t("sort.type")}</SelectItem>
+                <SelectItem value="manual"><GripVertical /> {t("sort.manual")}</SelectItem>
+                <SelectItem value="artist"><MicVocal /> {t("sort.artist")}</SelectItem>
+                <SelectItem value="title"><Type /> {t("sort.title")}</SelectItem>
+                <SelectItem value="duration"><Clock /> {t("sort.duration")}</SelectItem>
+                <SelectItem value="kind"><Shapes /> {t("sort.type")}</SelectItem>
               </SelectContent>
             </Select>
             {sort && <Button size="icon" variant="ghost" className="size-9 [&_svg]:size-4.5" title={t("tool.reverseSort")} onClick={() => setSort({ ...sort, dir: sort.dir === 1 ? -1 : 1 })}>{sort.dir === 1 ? <ArrowUp /> : <ArrowDown />}</Button>}
@@ -387,25 +548,32 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
           </div>
 
           <div className="flex min-h-0 flex-1">
-            {/* Rail vertical : sélection, lecture, ordre, métadonnées, favoris, vidage et suppression */}
-            <div className="flex w-14 shrink-0 flex-col items-center gap-1 border-r py-2" role="toolbar" aria-orientation="vertical">
-              <label className="flex flex-col items-center gap-1 py-1.5 text-[0.65rem] tabular-nums text-muted-foreground" title={selected.size > 0 ? t("tool.selectedCount", { n: selected.size }) : t("tool.selectAll")}>
-                <Checkbox checked={allSelected} onCheckedChange={(v) => setSelected(v === true ? new Set(visible.map((i) => i.id)) : new Set())} />
-                {selected.size > 0 && <span>{selected.size}</span>}
-              </label>
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={visible.length === 0} title={t("tool.invertTitle")} onClick={() => setSelected(new Set(visible.filter((i) => !selected.has(i.id)).map((i) => i.id)))}><ListChecks /></Button>
-              <span className="my-1 h-px w-7 bg-border" />
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={selected.size === 0} title={t("tool.playTitle")} onClick={() => { const first = visible.find((i) => selected.has(i.id)); if (first) p.play(first.id); }}><Play /></Button>
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={selected.size === 0 || !canReorder} title={canReorder ? t("tool.up") : t("tool.reorderHint")} onClick={() => p.moveItems([...selected], -1)}><ChevronUp /></Button>
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={selected.size === 0 || !canReorder} title={canReorder ? t("tool.down") : t("tool.reorderHint")} onClick={() => p.moveItems([...selected], 1)}><ChevronDown /></Button>
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={selected.size > 1 || (selected.size === 0 && !p.current)} title={t("meta.openTitle")} onClick={openMetadata}><Tags /></Button>
-              <span className="my-1 h-px w-7 bg-border" />
-              <Button size="icon" variant={favoritesOnly ? "secondary" : "ghost"} className="relative size-10 [&_svg]:size-5" title={`${t("tool.favoritesTitle")} (${p.items.filter((i) => favorites.has(i.path)).length})`} onClick={() => setFavoritesOnly((v) => !v)}>
-                <Heart className={cn(favoritesOnly && "fill-current")} />
-              </Button>
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={p.items.length < 2} title={t("tool.shuffleTitle")} onClick={() => { p.shuffleOrder(); setSort(null); }}><Shuffle /></Button>
-              <Button size="icon" variant="ghost" className="size-10 [&_svg]:size-5" disabled={p.items.length === 0} title={t("tool.clearTitle")} onClick={dump}><Eraser /></Button>
-              <Button size="icon" variant="ghost" className="mt-auto size-10 text-destructive hover:text-destructive [&_svg]:size-5" disabled={selected.size === 0} title={t("tool.removeTitle")} onClick={removeSelected}><Trash2 /></Button>
+            {/* Rail vertical, par groupes : sélection, lecture, ordre et édition, liste ; la suppression est isolée en bas */}
+            <div className="flex w-14 shrink-0 flex-col items-center gap-2 border-r px-1 py-2" role="toolbar" aria-orientation="vertical">
+              <RailGroup>
+                <label className="flex size-9 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg text-[0.62rem] tabular-nums text-muted-foreground hover:bg-primary/15" title={selected.size > 0 ? t("tool.selectedCount", { n: selected.size }) : t("tool.selectAll")}>
+                  <Checkbox checked={allSelected} onCheckedChange={(v) => setSelected(v === true ? new Set(visible.map((i) => i.id)) : new Set())} />
+                </label>
+                <RailButton disabled={visible.length === 0} title={t("tool.invertTitle")} onClick={() => setSelected(new Set(visible.filter((i) => !selected.has(i.id)).map((i) => i.id)))}><ListChecks /></RailButton>
+              </RailGroup>
+              <RailGroup>
+                <RailButton disabled={selected.size === 0} title={t("tool.playTitle")} onClick={() => { const first = visible.find((i) => selected.has(i.id)); if (first) p.play(first.id); }}><Play /></RailButton>
+                {/* Lire ensuite : ajoute la sélection, dans l'ordre d'affichage, à la file « à suivre » */}
+                <RailButton disabled={selected.size === 0} title={t("q.playNextTitle")} aria-label={t("q.playNext")} onClick={() => p.enqueue(visible.filter((i) => selected.has(i.id)).map((i) => i.id))}><ListEnd /></RailButton>
+                <RailButton disabled={p.items.length < 2} title={t("tool.shuffleTitle")} onClick={() => { p.shuffleOrder(); setSort(null); }}><Shuffle /></RailButton>
+              </RailGroup>
+              <RailGroup>
+                <RailButton disabled={selected.size === 0 || !canReorder} title={canReorder ? t("tool.up") : t("tool.reorderHint")} onClick={() => p.moveItems([...selected], -1)}><ChevronUp /></RailButton>
+                <RailButton disabled={selected.size === 0 || !canReorder} title={canReorder ? t("tool.down") : t("tool.reorderHint")} onClick={() => p.moveItems([...selected], 1)}><ChevronDown /></RailButton>
+                <RailButton disabled={selected.size > 1 || (selected.size === 0 && !p.current)} title={t("meta.openTitle")} onClick={openMetadata}><Tags /></RailButton>
+              </RailGroup>
+              <RailGroup>
+                <RailButton active={favoritesOnly} title={`${t("tool.favoritesTitle")} (${p.items.filter((i) => favorites.has(i.path)).length})`} onClick={() => setFavoritesOnly((v) => !v)}><Heart className={cn(favoritesOnly && "fill-current")} /></RailButton>
+                <RailButton disabled={p.items.length === 0} title={t("tool.clearTitle")} onClick={dump}><Eraser /></RailButton>
+              </RailGroup>
+              <RailGroup className="mt-auto">
+                <RailButton danger disabled={selected.size === 0} title={t("tool.removeTitle")} onClick={removeSelected}><Trash2 /></RailButton>
+              </RailGroup>
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col">
@@ -413,14 +581,20 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
               <div className="relative min-h-0 flex-1"><div className="absolute inset-0">
           <ScrollArea className="size-full">
           {p.items.length === 0 ? (
-            <div className="flex min-h-[20rem] flex-col justify-center gap-3 p-12">
-              <img src="/zarao-logo.png" alt="" className="size-24" />
-              <h2 className="text-xl font-semibold">{t("empty.title")}</h2>
-              <p className="max-w-xl text-sm text-muted-foreground">{t("empty.body")}</p>
-              <button className="w-fit text-sm text-sky-700 dark:text-sky-400 hover:underline" onClick={() => addFrom(pickFiles)}>{t("empty.addFiles")}</button>
-              <button className="w-fit text-sm text-sky-700 dark:text-sky-400 hover:underline" onClick={() => addFrom(pickFolder)}>{t("empty.openFolder")}</button>
-              <button className="w-fit text-sm text-sky-700 dark:text-sky-400 hover:underline" onClick={openPlaylistReplace}>{t("empty.loadPlaylist")}</button>
-              <p className="mt-6 text-xs text-muted-foreground">
+            <div className="flex min-h-[20rem] flex-col items-center justify-center gap-6 p-8">
+              <EmptyState
+                className="w-full max-w-2xl bg-card/40"
+                icon={ListMusic}
+                title={t("plist.emptyTitle")}
+                description={t("plist.emptyBody")}
+                tips={[t("plist.tip1"), t("plist.tip2"), t("plist.tip3")]}
+                actions={[
+                  { label: t("plist.btnFiles"), icon: FilePlus, onClick: () => addFrom(pickFiles) },
+                  { label: t("plist.btnFolder"), icon: FolderOpen, onClick: () => addFrom(pickFolder) },
+                  { label: t("plist.btnPlaylist"), icon: Library, onClick: openPlaylistReplace },
+                ]}
+              />
+              <p className="text-xs text-muted-foreground">
                 Zarao © 2026 - made with <span aria-label="arc-en-ciel, avocat, éléphant, poulet">🌈🥑🐘🐔</span> by Miranto Harison [mirantohrs@mail.com]
               </p>
             </div>
@@ -453,14 +627,14 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
                 {visible.map((i, n) => {
                   const isCurrent = p.current?.id === i.id;
                   return (
-                    <TableRow key={i.id} data-row-id={i.id} onPointerDown={(e) => startRowDrag(e, i.id)} data-state={selected.has(i.id) ? "selected" : undefined} className={cn("cursor-default [&>td]:py-1", isCurrent && "bg-primary/10 shadow-[inset_2px_0_0_var(--color-primary)]", dropTarget === i.id && "[&>td]:shadow-[inset_0_2px_0_0_var(--color-ring)]")} onDoubleClick={() => p.play(i.id)}>
+                    <TableRow key={i.id} data-row-id={i.id} data-track-id={i.id} onPointerDown={(e) => startRowDrag(e, i.id)} data-state={selected.has(i.id) ? "selected" : undefined} className={cn("group/row cursor-default border-b-0 [&>td]:py-2 [&>td]:shadow-[inset_0_-1px_0_var(--color-border)]", isCurrent && "bg-primary/10 shadow-[inset_2px_0_0_var(--color-primary)]", dropTarget === i.id && "[&>td]:shadow-[inset_0_2px_0_0_var(--color-ring)]")} onDoubleClick={() => p.play(i.id)}>
                       <TableCell className="pl-4"><Checkbox checked={selected.has(i.id)} onCheckedChange={() => toggleRow(i.id)} /></TableCell>
                       <TableCell className="text-center text-xs tabular-nums text-muted-foreground">
                         {isCurrent ? <PlayingBars playing={p.playing} /> : n + 1}
                       </TableCell>
                       <TableCell>{i.kind === "video" ? <FileVideo className="size-4 text-muted-foreground" /> : <FileAudio className="size-4 text-muted-foreground" />}</TableCell>
                       <TableCell className="truncate text-muted-foreground">{i.artist || "—"}</TableCell>
-                      <TableCell className={cn("max-w-0 truncate", isCurrent && "font-medium")} title={i.title}>{favorites.has(i.path) && <Heart className="mr-1.5 inline size-3 fill-current text-rose-400" />}{i.title}</TableCell>
+                      <TableCell className={cn("relative max-w-0 truncate", isCurrent && "font-medium")} title={i.title}>{favorites.has(i.path) && <Heart className="mr-1.5 inline size-3 fill-current text-rose-400" />}{i.title}<ResumeBar item={i} className="opacity-0 transition-opacity group-hover/row:opacity-100" /></TableCell>
                       <TableCell className="text-right text-xs tabular-nums text-muted-foreground">{formatSize(i.size)}</TableCell>
                       <TableCell className="pr-4 text-right tabular-nums">{formatTime(i.duration)}</TableCell>
                     </TableRow>
@@ -484,8 +658,9 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
           </ScrollArea>
               </div></div>
               {/* Pied : totaux */}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-1.5 text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-2 text-sm text-muted-foreground">
                 <span><Music className="mr-1 inline size-3" />{t("tool.items", { v: visible.length, t: p.items.length })}</span>
+                {selected.size > 0 && <span className="font-medium text-primary">{t("tool.selectedCount", { n: selected.size })}</span>}
                 {selected.size > 0 && <span>{t("tool.selection", { d: formatTime(selectedDuration) })}</span>}
                 <span className="ml-auto">{t("tool.total", { d: formatTime(totalDuration) })}</span>
               </div>
@@ -512,7 +687,7 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
 
         {!isVideo && layout === "scene" && <SceneStage p={p} lyrics={lyrics.lyrics} onOpenLyrics={() => setLyricsOpen(true)} onFullscreen={openFullscreen} />}
         {!isVideo && layout === "strip" && (
-          <StripStage p={p} lyrics={lyrics.lyrics} loading={lyrics.loading} onSearchOnline={lyrics.searchOnline} source={lyrics.source}
+          <StripStage p={p} lyrics={lyrics.lyrics} loading={lyrics.loading} onSearchOnline={lyrics.searchOnline} source={lyrics.source} onAddFiles={() => void addFrom(pickFiles)}
             onEdit={() => p.current && setMetaTarget({ id: p.current.id, source: { kind: "local", path: p.current.path, isVideo: p.current.kind === "video" } })} />
         )}
 
@@ -538,6 +713,9 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
       <PlayerBar
         p={p}
         isFavorite={isFavorite}
+        onGoto={openGoto}
+        onBookmarks={() => setBookmarksOpen(true)}
+        onSleepCustom={() => setSleepOpen(true)}
         onToggleFavorite={() => p.current && toggleFavorite(p.current.path)}
         onReveal={reveal}
         onCopy={copyTitle}
@@ -546,6 +724,8 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         lyricsOpen={lyricsOpen}
         eqOpen={eqOpen}
         onToggleEq={() => setEqOpen((o) => !o)}
+        listOpen={listOpen}
+        onToggleList={() => setListOpen((o) => !o)}
         onToggleLyrics={() => setLyricsOpen((o) => !o)}
       />
       <FullscreenPlayer p={p} open={visualizerOpen} onClose={() => setVisualizerOpen(false)} lyrics={lyrics.lyrics} />
@@ -643,7 +823,14 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         </DialogContent>
       </Dialog>
 
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog section={settingsSection} onClose={() => setSettingsSection(null)} />
+      <PlaylistsDialog p={p} open={playlistsOpen} onClose={() => setPlaylistsOpen(false)} />
+      <BookmarksDialog p={p} open={bookmarksOpen} onClose={() => setBookmarksOpen(false)} />
+      <SleepDialog p={p} open={sleepOpen} onClose={() => setSleepOpen(false)} />
+      <DuplicatesDialog p={p} open={dupOpen} onClose={() => setDupOpen(false)} />
+      <UnplayableDialog p={p} open={unplayableOpen} onClose={() => setUnplayableOpen(false)} />
+      <QueueDialog p={p} open={queueOpen} onClose={() => setQueueOpen(false)} />
+      {mini && <MiniPlayer p={p} onExit={() => setMiniMode(false)} />}
       <MetadataDialog
         source={metaTarget?.source ?? null}
         onClose={() => setMetaTarget(null)}
@@ -651,6 +838,22 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
         beforeSave={() => { if (metaTarget && p.current?.id === metaTarget.id) p.suspend(); }}
         afterSave={(newPath) => p.resume(newPath)}
       />
+
+      <Dialog open={gotoOpen} onOpenChange={setGotoOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><CornerDownRight className="size-5 text-primary" /> {t("goto.title")}</DialogTitle>
+            <DialogDescription>{t("goto.desc")}</DialogDescription>
+          </DialogHeader>
+          <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); submitGoto(); }}>
+            <div className="flex gap-2">
+              <Input autoFocus value={gotoValue} onChange={(e) => { setGotoValue(e.target.value); setGotoError(null); }} placeholder={t("goto.placeholder")} aria-label={t("goto.title")} aria-invalid={gotoError !== null} />
+              <Button type="submit" disabled={!gotoValue.trim()}>{t("goto.btn")}</Button>
+            </div>
+            {gotoError && <p role="alert" className="text-sm text-destructive">{gotoError}</p>}
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
         <DialogContent>
@@ -663,7 +866,45 @@ export function LocalPlayer({ onBack }: { onBack: () => void }) {
           </dl>
         </DialogContent>
       </Dialog>
+
+      {/* Menu contextuel : piste sous le curseur, sinon fond de l'écran. */}
+      <ContextMenuContent>
+        {ctxItem ? (
+          <>
+            <ContextMenuItem onSelect={() => p.play(ctxItem.id)}><Play /> {t("tool.play")}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => p.enqueue(ctxIds)}><ListEnd /> {t("q.playNext")}</ContextMenuItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger><ListPlus /> {t("ctx.addToPlaylist")}</ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+                {playlistChoices.length === 0
+                  ? <ContextMenuItem disabled>{t("ctx.noPlaylist")}</ContextMenuItem>
+                  : playlistChoices.map((l) => <ContextMenuItem key={l.id} onSelect={() => addCtxToPlaylist(l)}><Library /> <span className="max-w-56 truncate">{l.name}</span></ContextMenuItem>)}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => toggleFavorite(ctxItem.path)}>
+              <Heart /> {favorites.has(ctxItem.path) ? t("fav.remove") : t("fav.add")}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => { setMessage(null); setMetaTarget({ id: ctxItem.id, source: { kind: "local", path: ctxItem.path, isVideo: ctxItem.kind === "video" } }); }}><Tags /> {t("meta.open")}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => { revealItemInDir(ctxItem.path).catch(() => setMessage(t("msg.revealFail"))); }}><FolderOpen /> {t("player.reveal")}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => { void navigator.clipboard?.writeText(ctxItem.artist ? `${ctxItem.artist} - ${ctxItem.title}` : ctxItem.title); }}><Copy /> {t("player.copy")}</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={() => { p.removeItems(ctxIds); setSelected((s) => { const n = new Set(s); ctxIds.forEach((id) => n.delete(id)); return n; }); }}><Trash2 /> {t("tool.remove")}</ContextMenuItem>
+          </>
+        ) : (
+          <>
+            <ContextMenuItem onSelect={() => setPlaylistsOpen(true)}><Library /> {t("mypl.menu")}</ContextMenuItem>
+            <ContextMenuItem disabled={!p.current} onSelect={goToCurrent}><Crosshair /> {t("goto.current")}</ContextMenuItem>
+            <ContextMenuItem onSelect={openGoto}><CornerDownRight /> {t("goto.menu")}</ContextMenuItem>
+            <ContextMenuItem onSelect={() => setDupOpen(true)}><CopyCheck /> {t("dup.menu")}</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextViewItems />
+          </>
+        )}
+      </ContextMenuContent>
     </div>
+    </ContextMenuTrigger>
+    </ContextMenu>
   );
 }
 
@@ -680,6 +921,21 @@ function Thumb({ item, className, iconClass }: { item: MediaItem; className?: st
   );
 }
 
+/** Groupe de boutons du rail : une pastille discrète qui regroupe des actions voisines. */
+function RailGroup({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("flex w-10 flex-col items-center gap-0.5 rounded-xl bg-foreground/5 p-0.5", className)}>{children}</div>;
+}
+
+/** Bouton du rail : même gabarit partout, teinte d'accent au survol, `active` pour un filtre activé, `danger` pour la suppression. */
+function RailButton({ active, danger, className, ...props }: React.ComponentProps<typeof Button> & { active?: boolean; danger?: boolean }) {
+  return (
+    <Button size="icon" variant="ghost" aria-pressed={active}
+      className={cn("size-9 rounded-lg transition-colors hover:bg-primary/15 hover:text-primary [&_svg]:size-[1.15rem]",
+        active && "bg-primary/20 text-primary ring-1 ring-primary/50 hover:bg-primary/25",
+        danger && "text-destructive hover:bg-destructive/15 hover:text-destructive", className)} {...props} />
+  );
+}
+
 /**
  * Carte de la vue « Images » : pochette pleine sans cadre, durée en pastille, texte dessous.
  * IMPORTANT : case à cocher, lecture et favori n'apparaissent qu'au survol (ou si déjà actifs) pour garder la grille calme.
@@ -687,17 +943,20 @@ function Thumb({ item, className, iconClass }: { item: MediaItem; className?: st
 function MediaCard({ item, active, playing, selected, favorite, onToggle, onToggleFavorite, onPlay }: MediaViewProps) {
   const { t } = useI18n();
   return (
-    <div className="group min-w-0 cursor-default" onDoubleClick={onPlay}>
+    <div className="group min-w-0 cursor-default" data-track-id={item.id} onDoubleClick={onPlay}>
       <div className={cn("relative aspect-square overflow-hidden rounded-xl bg-muted shadow-sm transition-shadow group-hover:shadow-lg", active && "ring-2 ring-ring", selected && "ring-2 ring-primary")}>
         <Thumb item={item} className="size-full" iconClass="size-12" />
-        <Checkbox className={cn("absolute left-2 top-2 bg-background transition-opacity", selected ? "opacity-100" : "opacity-0 group-hover:opacity-100")} checked={selected} onCheckedChange={onToggle} />
-        <button type="button" aria-label={t("tool.favorites")} onClick={onToggleFavorite} className={cn("absolute right-2 top-2 rounded-full bg-background/80 p-1.5 transition-opacity", favorite ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
+        {/* IMPORTANT : case et favori au-dessus (z-10) du voile de survol, sinon celui-ci intercepte leurs clics. */}
+        <Checkbox className={cn("absolute left-2 top-2 z-10 bg-background transition-opacity", selected ? "opacity-100" : "opacity-0 group-hover:opacity-100")} checked={selected} onCheckedChange={onToggle} />
+        <button type="button" aria-label={t("tool.favorites")} onClick={onToggleFavorite} className={cn("absolute right-2 top-2 z-10 rounded-full bg-background/80 p-1.5 transition-opacity", favorite ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
           <Heart className={cn("size-3.5", favorite && "fill-current text-rose-400")} />
         </button>
-        <button type="button" aria-label={t("tool.play")} onClick={onPlay} className="absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition-all group-hover:bg-black/25 group-hover:opacity-100">
+        {/* Simple indication au survol : la lecture se lance au DOUBLE clic (sur la carte), pas au clic, pour ne pas interrompre une sélection. */}
+        <div aria-hidden className="pointer-events-none absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition-all group-hover:bg-black/25 group-hover:opacity-100">
           <span className="grid size-11 place-items-center rounded-full bg-background/90 text-foreground shadow-lg"><Play className="size-5" /></span>
-        </button>
+        </div>
         <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[0.7rem] tabular-nums text-white">{formatTime(item.duration)}</span>
+        <ResumeBar item={item} />
         {active && <span className="absolute bottom-2 right-2 rounded-md bg-black/60 px-1.5 py-1"><PlayingBars playing={playing} className="text-white" /></span>}
       </div>
       <p className={cn("mt-2 truncate text-sm font-medium", active && "text-foreground")} title={item.title}>{item.title}</p>
@@ -710,10 +969,11 @@ function MediaCard({ item, active, playing, selected, favorite, onToggle, onTogg
 function MediaRow({ item, active, playing, selected, favorite, onToggle, onToggleFavorite, onPlay }: MediaViewProps) {
   const { t } = useI18n();
   return (
-    <div className={cn("group flex cursor-default items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-accent/60", active && "bg-accent", selected && "ring-1 ring-ring")} onDoubleClick={onPlay}>
+    <div className={cn("group flex cursor-default items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-accent/60", active && "bg-accent", selected && "ring-1 ring-ring")} data-track-id={item.id} onDoubleClick={onPlay}>
       <Checkbox checked={selected} onCheckedChange={onToggle} className={cn("transition-opacity", selected ? "opacity-100" : "opacity-0 group-hover:opacity-100")} />
       <button type="button" aria-label={t("tool.play")} onClick={onPlay} className="relative size-11 shrink-0 overflow-hidden rounded-md">
         <Thumb item={item} className="size-full" iconClass="size-5" />
+        <ResumeBar item={item} className="h-[0.15rem]" />
         <span className={cn("absolute inset-0 grid place-items-center bg-black/45 text-white transition-opacity", active ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
           {active ? <PlayingBars playing={playing} className="text-white" /> : <Play className="size-4" />}
         </span>
@@ -733,8 +993,9 @@ function MediaRow({ item, active, playing, selected, favorite, onToggle, onToggl
 /** Mur de pochettes : affiche les titres au survol, comme la vue "jacket" d'origine. */
 function JacketTile({ item, active, onPlay }: { item: MediaItem; active: boolean; onPlay: () => void }) {
   return (
-    <div className={cn("group relative aspect-square cursor-default overflow-hidden rounded-md bg-muted", active && "ring-2 ring-ring")} onDoubleClick={onPlay} title={`${item.artist} — ${item.title}`}>
+    <div className={cn("group relative aspect-square cursor-default overflow-hidden rounded-md bg-muted", active && "ring-2 ring-ring")} data-track-id={item.id} onDoubleClick={onPlay} title={`${item.artist} — ${item.title}`}>
       {item.jacket ? <img src={item.jacket} alt="" className="size-full object-cover" /> : <div className="grid size-full place-items-center"><Music className="size-8 text-muted-foreground" /></div>}
+      <ResumeBar item={item} />
       <div className="absolute inset-x-0 bottom-0 translate-y-full bg-background/85 p-1.5 text-xs transition-transform group-hover:translate-y-0">
         <p className="truncate font-medium">{item.title}</p>
         <p className="truncate text-muted-foreground">{item.artist || "---"}</p>
@@ -795,7 +1056,7 @@ function CoverFlow({ items, focus, currentId, onFocus, onPlay }: { items: MediaI
   const size = Math.round(boxH * 0.78); // côté de la pochette du centre : laisse une marge, rien n'est rogné
   const visible = items.map((item, i) => ({ item, i, off: i - focus })).filter((x) => Math.abs(x.off) <= FLOW_SIDE);
   return (
-    <div ref={boxRef} className="relative h-[min(22rem,46vh)] w-full" style={{ perspective: "1200px" }} onWheel={onWheel}>
+    <div ref={boxRef} className="relative min-h-[5rem] w-full max-h-[34rem] flex-1" style={{ perspective: "1200px" }} onWheel={onWheel}>
       {visible.map(({ item, i, off }) => {
         const abs = Math.abs(off);
         const dir = Math.sign(off);
@@ -847,47 +1108,112 @@ function SceneStage({ p, lyrics, onOpenLyrics, onFullscreen }: { p: ReturnType<t
   const shown = p.items[safeFocus] ?? cur;
   const go = (i: number) => setFocus(Math.max(0, Math.min(p.items.length - 1, i)));
 
+  // Fiche de la liste : totaux, temps restant (fin du morceau en cours + morceaux suivants) et prochains titres.
+  const totalSec = p.items.reduce((sum, i) => sum + i.duration, 0);
+  const upcoming = p.items.slice(currentIndex + 1, currentIndex + 4);
+  const remainingSec = cur ? Math.max(0, cur.duration - p.time) + p.items.slice(currentIndex + 1).reduce((sum, i) => sum + i.duration, 0) : totalSec;
+  const videos = p.items.filter((i) => i.kind === "video").length;
+  const isShownPlaying = Boolean(shown) && shown?.id === cur?.id && p.playing;
+  const playShown = () => { if (!shown) return; if (shown.id === cur?.id) p.togglePlay(); else p.play(shown.id); };
+
   return (
-    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-4 overflow-hidden p-6">
+    <div className="relative min-w-0 flex-1 overflow-hidden">
+      {/* Fond : la pochette du morceau regardé, très floue (le logo à défaut) ; change en fondu avec le carrousel. */}
+      <img key={shown?.id ?? "none"} src={shown?.jacket ?? "/zarao-logo.png"} alt="" className="pointer-events-none absolute inset-0 size-full scale-125 object-cover opacity-25 blur-3xl animate-in fade-in duration-700" />
+      {/* IMPORTANT : AUCUN défilement sur cette scène. Le conteneur est une « container query » en hauteur : le carrousel (flex-1) absorbe
+          d'abord le manque de place, puis les groupes les moins importants disparaissent quand la fenêtre est trop basse
+          (cartes d'abord, puis fiche du morceau, puis paroles). Les seuils sont en rem car la hauteur du contenu est en rem. */}
+      <div className="absolute inset-0 overflow-hidden" style={{ containerType: "size" }}>
+          <div className="flex h-full flex-col items-center justify-center gap-[clamp(0.5rem,3.2vh,2.5rem)] p-[clamp(0.75rem,3vh,2.5rem)]">
       {p.items.length > 0
         ? <CoverFlow items={p.items} focus={safeFocus} currentId={cur?.id} onFocus={go} onPlay={p.play} />
-        : <Cover item={null} className="h-[min(22rem,46vh)]" />}
+        : <Cover item={null} className="min-h-[5rem] max-h-[34rem] flex-1" />}
 
       <div className="flex w-full max-w-xl items-center gap-3">
         <Button size="icon" variant="outline" className="size-10 shrink-0 rounded-full" onClick={() => go(safeFocus - 1)} disabled={safeFocus <= 0} title={t("ctl.previous")}><ChevronLeft /></Button>
         <div className="min-w-0 flex-1 text-center">
-          <p className="truncate text-lg font-semibold" title={shown?.title}>{shown?.title ?? t("np.none")}</p>
+          <p className="truncate text-xl font-semibold" title={shown?.title}>{shown?.title ?? t("np.none")}</p>
           <p className="truncate text-sm text-muted-foreground">{shown?.artist || "—"}{p.items.length > 0 && <span className="ml-2 tabular-nums">· {safeFocus + 1}/{p.items.length}</span>}</p>
         </div>
         <Button size="icon" variant="outline" className="size-10 shrink-0 rounded-full" onClick={() => go(safeFocus + 1)} disabled={safeFocus >= p.items.length - 1} title={t("ctl.next")}><ChevronRight /></Button>
       </div>
 
-      <div className="w-full space-y-1 px-8 text-center">
+      {/* Fiche du morceau regardé : format, taille, année, durée */}
+      {shown && (
+        <div className="hidden flex-wrap justify-center gap-1.5 [@container(min-height:30rem)]:flex">
+          <Badge variant="secondary">{shown.ext.toUpperCase()}</Badge>
+          <Badge variant="outline">{formatTime(shown.duration)}</Badge>
+          {shown.size > 0 && <Badge variant="outline">{formatSize(shown.size)}</Badge>}
+          {shown.year && <Badge variant="outline">{shown.year}</Badge>}
+          <Badge variant="outline">{t(shown.kind === "video" ? "dlg.video" : "dlg.audio")}</Badge>
+        </div>
+      )}
+
+      {/* Actions : lire le morceau regardé (le carrousel peut montrer un autre que celui qui joue), paroles, plein écran */}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button className="min-w-32 rounded-full" disabled={!shown} onClick={playShown}>{isShownPlaying ? <Pause /> : <Play />} {isShownPlaying ? t("ctl.pause") : t("ctl.play")}</Button>
+        <Button variant="outline" className="rounded-full" onClick={onOpenLyrics}><MicVocal /> {t("scene.openLyrics")}</Button>
+        <Button variant="ghost" className="rounded-full" onClick={onFullscreen} disabled={!cur}><Maximize /> {t("np.open")}</Button>
+      </div>
+
+      <div className="hidden w-full space-y-1 px-8 text-center [@container(min-height:24rem)]:block">
         {lyrics?.synced ? (
           [active - 1, active, active + 1].map((i, k) => {
             const text = i >= 0 && i < lyrics.lines.length ? lyrics.lines[i].text : "";
             return <p key={`${i}-${k}`} className={cn("min-h-7 truncate transition-all duration-300", k === 1 ? "text-2xl font-semibold" : "text-base text-muted-foreground/60")}>{text || "\u00A0"}</p>;
           })
         ) : (
-          <div className="flex items-center justify-center gap-3 text-sm text-muted-foreground">
-            <span>{t("scene.noSync")}</span>
-            <Button variant="secondary" size="sm" onClick={onOpenLyrics}><MicVocal /> {t("scene.openLyrics")}</Button>
-            <Button variant="ghost" size="sm" onClick={onFullscreen} disabled={!cur}><Maximize /> {t("np.open")}</Button>
-          </div>
+          <p className="pt-2 text-xs text-muted-foreground">{t("scene.noSync")}</p>
         )}
+      </div>
+
+      {/* Cartes d'information : prochains titres, fiche de la liste, raccourcis */}
+      <div className="hidden w-full max-w-4xl gap-3 pt-[clamp(0rem,1.5vh,1rem)] sm:grid-cols-3 [@container(min-height:40rem)]:grid">
+        <section className="min-w-0 rounded-xl bg-card/60 p-3 backdrop-blur-sm">
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("scene.next")}</h3>
+          {upcoming.length === 0
+            ? <p className="text-sm text-muted-foreground">{t("scene.endOfList")}</p>
+            : <ul className="space-y-0.5">{upcoming.map((i) => (
+                <li key={i.id}><button type="button" className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm hover:bg-accent" onClick={() => p.play(i.id)} title={i.title}>
+                  <span className="min-w-0 flex-1 truncate">{i.title}</span><span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatTime(i.duration)}</span>
+                </button></li>
+              ))}</ul>}
+        </section>
+
+        <section className="min-w-0 rounded-xl bg-card/60 p-3 backdrop-blur-sm">
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("scene.stats")}</h3>
+          <dl className="space-y-1.5 text-sm">
+            <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{t("scene.titles", { n: p.items.length })}</dt><dd className="truncate text-xs text-muted-foreground">{t("scene.mix", { a: p.items.length - videos, v: videos })}</dd></div>
+            <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{t("scene.total")}</dt><dd className="tabular-nums">{formatTime(totalSec)}</dd></div>
+            <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{t("scene.remaining")}</dt><dd className="tabular-nums">{formatTime(remainingSec)}</dd></div>
+          </dl>
+        </section>
+
+        <section className="min-w-0 rounded-xl bg-card/60 p-3 backdrop-blur-sm">
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("scene.shortcuts")}</h3>
+          <dl className="space-y-1.5 text-sm">
+            {SHORTCUTS.slice(0, 4).map(([keys, label]) => (
+              <div key={keys} className="flex items-center justify-between gap-2"><dd className="min-w-0 truncate text-muted-foreground">{t(label)}</dd><dt><code className="whitespace-nowrap rounded border px-1.5 py-0.5 text-[0.7rem]">{keys}</code></dt></div>
+            ))}
+          </dl>
+        </section>
+      </div>
+          </div>
       </div>
     </div>
   );
 }
 
 /** Disposition « paroles et bande » : paroles en grand, petite pochette, file de lecture en bande horizontale de pochettes. */
-function StripStage({ p, lyrics, loading, onEdit, onSearchOnline, source }: { p: ReturnType<typeof usePlayer>; lyrics: Lyrics | null; loading: boolean; onEdit: () => void; onSearchOnline: () => Promise<boolean>; source: "lrclib" | null }) {
+function StripStage({ p, lyrics, loading, onEdit, onSearchOnline, source, onAddFiles }: { p: ReturnType<typeof usePlayer>; lyrics: Lyrics | null; loading: boolean; onEdit: () => void; onSearchOnline: () => Promise<boolean>; source: "lrclib" | null; onAddFiles: () => void }) {
   const { t } = useI18n();
   const cur = p.current;
   const trackRef = useRef<HTMLDivElement>(null);
   // La carte du morceau en cours reste centrée quand il change (la navigation manuelle reste libre entre-temps).
   useEffect(() => {
-    trackRef.current?.querySelector('[data-current="true"]')?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+    const track = trackRef.current;
+    const card = track?.querySelector('[data-current="true"]');
+    if (track && card) centerInScroller(track, card, "x");
   }, [cur?.id]);
   const scrollQueue = (dir: 1 | -1) => trackRef.current?.scrollBy({ left: dir * 3 * 240, behavior: "smooth" });
   // Molette verticale : convertie en défilement horizontal (sinon la bande ne répond qu'au trackpad ou à la barre).
@@ -897,7 +1223,10 @@ function StripStage({ p, lyrics, loading, onEdit, onSearchOnline, source }: { p:
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1">
-        <LyricsPanel className="min-w-0 flex-1" lyrics={lyrics} loading={loading} hasTrack={Boolean(cur)} time={p.time} onSeek={p.seek} onEdit={onEdit} onSearchOnline={onSearchOnline} source={source} />
+        {/* Sans paroles (et pas en cours de recherche), la zone n'est plus vide : visualiseur + actions utiles. */}
+        {lyrics || loading
+          ? <LyricsPanel className="min-w-0 flex-1" lyrics={lyrics} loading={loading} hasTrack={Boolean(cur)} time={p.time} onSeek={p.seek} onEdit={onEdit} onSearchOnline={onSearchOnline} source={source} />
+          : <NoLyricsStage p={p} onEdit={onEdit} onSearchOnline={onSearchOnline} onAddFiles={onAddFiles} />}
         <aside className="hidden w-48 shrink-0 flex-col gap-2 border-l p-4 md:flex">
           <Cover item={cur} className="w-full" />
           <p className="truncate text-sm font-medium" title={cur?.title}>{cur?.title ?? t("np.none")}</p>
@@ -939,6 +1268,52 @@ function StripStage({ p, lyrics, loading, onEdit, onSearchOnline, source }: { p:
           <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-background to-transparent" />
           <Button size="icon" variant="secondary" className="absolute left-2 top-1/2 z-10 size-9 -translate-y-1/2 rounded-full shadow-md" onClick={() => scrollQueue(-1)} title={t("ctl.previous")}><ChevronLeft /></Button>
           <Button size="icon" variant="secondary" className="absolute right-2 top-1/2 z-10 size-9 -translate-y-1/2 rounded-full shadow-md" onClick={() => scrollQueue(1)} title={t("ctl.next")}><ChevronRight /></Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Zone des paroles quand il n'y en a pas : le visualiseur occupe l'espace (logo Zarao au repos, pochette en lecture),
+ * avec en bas de quoi agir — chercher en ligne ou saisir les paroles ; sans morceau, lancer la lecture ou ajouter des fichiers.
+ */
+function NoLyricsStage({ p, onEdit, onSearchOnline, onAddFiles }: { p: ReturnType<typeof usePlayer>; onEdit: () => void; onSearchOnline: () => Promise<boolean>; onAddFiles: () => void }) {
+  const { t } = useI18n();
+  const [theme] = useVisualizerTheme();
+  const cur = p.current;
+  const [searching, setSearching] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  // Un résultat « introuvable » ne vaut que pour le morceau où il a été obtenu.
+  useEffect(() => { setNotFound(false); }, [cur?.id]);
+  const needTags = Boolean(cur) && (!cur?.artist || !cur?.title);
+  const search = async () => { setSearching(true); try { setNotFound(!(await onSearchOnline())); } finally { setSearching(false); } };
+
+  return (
+    // IMPORTANT : le visualiseur et la carte d'actions sont deux blocs l'un sous l'autre (pas de superposition) :
+    // la carte posée par-dessus masquait le bas du spectre.
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="relative min-h-0 flex-1">
+        <AudioVisualizer className="absolute inset-0" mediaRef={p.mediaRef} playing={p.playing} source={spectrumSourceOf(cur)} jacket={cur?.jacket} theme={theme} />
+      </div>
+      <div className="mx-auto mb-4 flex w-full max-w-2xl flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-2xl bg-card/70 px-4 py-3 shadow-lg backdrop-blur-xl">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary"><MicVocal className="size-4" /></span>
+        <div className="min-w-0 flex-1 text-left">
+          <p className="truncate text-sm font-medium">{cur ? t("lyr.none") : t("lyr.noTrack")}</p>
+          {cur && (notFound || needTags) && <p className="truncate text-xs text-muted-foreground">{needTags ? t("lyr.needTags") : t("lyr.notFound")}</p>}
+        </div>
+        <div className="flex shrink-0 gap-2">
+          {cur ? (
+            <>
+              <Button size="sm" disabled={searching || needTags} onClick={() => void search()}><Search /> {searching ? t("lyr.loading") : t("lyr.search")}</Button>
+              <Button size="sm" variant="outline" onClick={onEdit}><Pencil /> {t("lyr.add")}</Button>
+            </>
+          ) : (
+            <>
+              {p.items.length > 0 && <Button size="sm" onClick={() => p.play(p.items[0].id)}><Play /> {t("ctl.play")}</Button>}
+              <Button size="sm" variant={p.items.length > 0 ? "outline" : "default"} onClick={onAddFiles}><FilePlus /> {t("file.addFiles")}</Button>
+            </>
+          )}
         </div>
       </div>
     </div>

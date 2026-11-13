@@ -1,11 +1,14 @@
 import { PaletteMenuItems } from "@/components/PaletteMenuItems";
+import { RefreshMenuItem } from "@/components/RefreshMenuItem";
+import { startResumeSync } from "@/lib/resumeSync";
+import { useTray } from "@/lib/tray";
 import { ZoomMenuItems } from "@/components/ZoomMenuItems";
-import { VideoStage, toggleVideoFullscreen } from "@/components/VideoStage";
+import { VideoStage, toggleVideoFullscreen, useFullscreenKindSwitch } from "@/components/VideoStage";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeftRight, Compass, Download, Film, Home, Library, ListMusic, ListPlus, LogOut, Music, Plus, RefreshCw, Search, SearchX, Settings, Sparkles, Trash2, UserRound, X, PanelLeftClose, PanelLeftOpen, Grid2x2, Rows3, GalleryHorizontal } from "lucide-react";
+import { ArrowLeftRight, Compass, Download, Film, Home, Library, ListMusic, ListPlus, LogOut, Music, Plus, RefreshCw, Search, SearchX, Sparkles, Trash2, UserRound, X, PanelLeftClose, PanelLeftOpen, Grid2x2, Rows3, GalleryHorizontal } from "lucide-react";
 import { LoadingState } from "@/components/LoadingState";
 import { EmptyState } from "@/components/EmptyState";
 import { InfoNote, boldMarkup } from "@/components/InfoNote";
@@ -15,6 +18,8 @@ import { LyricsPanel } from "@/components/LyricsPanel";
 import { EqualizerPanel } from "@/components/EqualizerPanel";
 import { MetadataDialog, type MetadataSaved } from "@/components/MetadataDialog";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import type { SettingsSection } from "@/components/settings/sections";
+import { SettingsMenuItems } from "@/components/settings/SettingsMenuItems";
 import { PlayerBar, SEEK_STEP } from "@/components/PlayerBar";
 import { PlayingBars } from "@/components/PlayingBars";
 import { Button } from "@/components/ui/button";
@@ -88,6 +93,9 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
     try { const v = localStorage.getItem("zarao.online.mediaView"); return v === "rows" || v === "shelves" ? v : "cards"; } catch { return "cards"; }
   });
   useEffect(() => { try { localStorage.setItem("zarao.online.mediaView", mediaView); } catch { /* non bloquant */ } }, [mediaView]);
+  // Reprise des vidéos synchronisée avec le compte (positions fusionnées à l'ouverture, envoyées en différé ensuite).
+  useEffect(() => startResumeSync(user._id), [user._id]);
+  useTray(p);
   // Menu latéral : libellés visibles ou icônes seules, mémorisé d'une session à l'autre.
   const [navCollapsed, setNavCollapsed] = useState(() => { try { return localStorage.getItem("zarao.online.navCollapsed") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("zarao.online.navCollapsed", navCollapsed ? "1" : "0"); } catch { /* non bloquant */ } }, [navCollapsed]);
@@ -106,7 +114,8 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
   const [searching, setSearching] = useState(false);
 
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Page des Paramètres ouverte (null = fermé) : chaque page est une entrée du menu « Paramètres ».
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   // Barre de recherche collante : sa hauteur réelle est répercutée sur l'en-tête du volet des paroles.
   const [searchEl, setSearchEl] = useState<HTMLFormElement | null>(null);
   const [searchBarH, setSearchBarH] = useState<number>();
@@ -274,6 +283,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
   });
 
   const isVideo = p.current?.kind === "video";
+  useFullscreenKindSwitch(p.current?.kind, visualizerOpen, setVisualizerOpen);
   const currentRemoteId = p.current?.remoteId;
 
   // --- Rendu des sections ---
@@ -410,11 +420,16 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
             <MenubarContent>
               <MenubarItem onClick={() => setView("upload")}><Plus /> {t("nav.upload")}</MenubarItem>
               <MenubarItem onClick={() => setView("account")}><UserRound /> {t("nav.account")}</MenubarItem>
-              <MenubarItem onClick={() => setSettingsOpen(true)}><Settings /> {t("set.title")}…</MenubarItem>
               <MenubarSeparator />
               <MenubarItem onClick={onLogout}><LogOut /> {t("on.logout")}</MenubarItem>
               <MenubarItem onClick={onBack}><ArrowLeftRight /> {t("file.changeMode")}</MenubarItem>
               <MenubarItem onClick={() => void getCurrentWindow().close()}><X /> {t("file.quit")}</MenubarItem>
+            </MenubarContent>
+          </MenubarMenu>
+          <MenubarMenu>
+            <MenubarTrigger>{t("menu.settings")}</MenubarTrigger>
+            <MenubarContent>
+              <SettingsMenuItems onOpen={setSettingsSection} />
             </MenubarContent>
           </MenubarMenu>
           <MenubarMenu>
@@ -423,6 +438,8 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
               <ZoomMenuItems />
               <MenubarSeparator />
               <PaletteMenuItems />
+              <MenubarSeparator />
+              <RefreshMenuItem />
             </MenubarContent>
           </MenubarMenu>
         </Menubar>
@@ -558,7 +575,7 @@ export function OnlineLibrary({ user, onLogout, onBack, onUserChange }: Props) {
           return undefined;
         }}
       />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog section={settingsSection} onClose={() => setSettingsSection(null)} />
       <MetadataDialog source={editId ? { kind: "online", id: editId, userid: user._id } : null} onClose={() => setEditId(null)} onSaved={onMetadataSaved} />
 
       <Dialog open={deleteTarget !== null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
