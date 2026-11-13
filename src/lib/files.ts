@@ -2,6 +2,7 @@ import { tr } from "@/i18n";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readDir, readTextFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { audioExt, videoExt, isSupported } from "@/lib/media";
+import { getScanSettings, matchesAnyPattern } from "@/lib/settings";
 
 /** Sélection de fichiers médias (multi). Retourne des chemins disque. */
 export async function pickFiles(): Promise<string[]> {
@@ -17,13 +18,37 @@ export async function pickFiles(): Promise<string[]> {
   return Array.isArray(res) ? res : res ? [res] : [];
 }
 
-/** Scanne un dossier (non récursif, comme l'ancienne version) et ne garde que les médias supportés. */
+/** Plafond de fichiers retenus par scan : un parcours récursif d'un disque entier ne doit pas figer l'interface. */
+const MAX_SCAN_FILES = 5000;
+
+/**
+ * Médias supportés d'un dossier. Par défaut à plat (comme l'ancienne version) ; les Paramètres (Bibliothèque) activent le parcours
+ * des sous-dossiers (profondeur bornée), l'ignorance des éléments cachés et des motifs d'exclusion.
+ * IMPORTANT : seul le dossier de départ propage son erreur de lecture ; un sous-dossier illisible est simplement ignoré.
+ */
+export async function scanFolder(dir: string): Promise<string[]> {
+  const { recursive, maxDepth, hidden, exclude } = getScanSettings();
+  const sep = dir.includes("\\") ? "\\" : "/";
+  const out: string[] = [];
+  const walk = async (current: string, depth: number) => {
+    const entries = depth === 0 ? await readDir(current) : await readDir(current).catch(() => []);
+    for (const e of entries) {
+      if (out.length >= MAX_SCAN_FILES) return;
+      if (!hidden && e.name.startsWith(".")) continue;
+      if (exclude.length > 0 && matchesAnyPattern(e.name, exclude)) continue;
+      const full = `${current}${sep}${e.name}`;
+      if (e.isFile) { if (isSupported(e.name)) out.push(full); }
+      else if (e.isDirectory && recursive && depth < maxDepth) await walk(full, depth + 1);
+    }
+  };
+  await walk(dir, 0);
+  return out;
+}
+
+/** Choix d'un dossier puis scan (cf. scanFolder). */
 export async function pickFolder(): Promise<string[]> {
   const dir = await open({ directory: true, title: tr("dlg.scanFolder") });
-  if (typeof dir !== "string") return [];
-  const sep = dir.includes("\\") ? "\\" : "/";
-  const entries = await readDir(dir);
-  return entries.filter((e) => e.isFile && isSupported(e.name)).map((e) => `${dir}${sep}${e.name}`);
+  return typeof dir === "string" ? scanFolder(dir) : [];
 }
 
 type PlaylistFile = { version: 1; paths: string[] };
@@ -55,17 +80,14 @@ export async function loadPlaylist(): Promise<string[]> {
 
 /**
  * Convertit des chemins déposés (fichiers ou dossiers) en liste de médias supportés.
- * IMPORTANT : un dossier est scanné à plat, comme « Ajouter un dossier » ; un chemin illisible est ignoré plutôt que de bloquer le dépôt.
+ * IMPORTANT : un dossier est scanné comme « Ajouter un dossier » (mêmes réglages) ; un chemin illisible est ignoré plutôt que de bloquer le dépôt.
  */
 export async function expandDropped(paths: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const path of paths) {
     try {
-      if ((await stat(path)).isDirectory) {
-        const sep = path.includes("\\") ? "\\" : "/";
-        const entries = await readDir(path);
-        out.push(...entries.filter((e) => e.isFile && isSupported(e.name)).map((e) => `${path}${sep}${e.name}`));
-      } else if (isSupported(path)) out.push(path);
+      if ((await stat(path)).isDirectory) out.push(...(await scanFolder(path)));
+      else if (isSupported(path)) out.push(path);
     } catch { /* chemin inaccessible : on passe au suivant */ }
   }
   return out;

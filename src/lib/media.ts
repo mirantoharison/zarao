@@ -28,6 +28,9 @@ export type MediaItem = {
   /** Octets ; 0 tant que non lu. */
   size: number;
   jacket?: string;
+  /** ReplayGain (dB) lu dans les tags du fichier ; absent = pas de tag. */
+  trackGainDb?: number;
+  albumGainDb?: number;
 };
 
 /** Extensions que la webview lit en principe telles quelles : pas de sonde du serveur à l'ajout (liste affichée vite, hors ligne). */
@@ -108,6 +111,8 @@ export async function loadMetadata(item: MediaItem): Promise<Partial<MediaItem>>
       duration: meta.format.duration ?? 0,
       size,
       jacket,
+      trackGainDb: meta.common.replaygain_track_gain?.dB,
+      albumGainDb: meta.common.replaygain_album_gain?.dB,
     };
   } catch (err) {
     console.warn("[zarao] lecture des métadonnées impossible :", item.path, err);
@@ -154,4 +159,24 @@ export function guessFromName(title: string): { artist: string; title: string } 
   const i = title.indexOf(" - ");
   if (i <= 0 || i >= title.length - 3) return null;
   return { artist: title.slice(0, i).trim(), title: title.slice(i + 3).trim() };
+}
+
+/** Dirige la sortie d'un élément média vers un périphérique ("" = celui du système). Sans effet si le moteur ne sait pas (setSinkId absent). */
+export function applyMediaSink(el: HTMLMediaElement, sinkId: string): void {
+  const withSink = el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> };
+  if (withSink.setSinkId) void withSink.setSinkId(sinkId).catch(() => undefined);
+}
+
+export type OutputDevice = { id: string; label: string };
+/**
+ * Périphériques de sortie audio. IMPORTANT : sans autorisation d'accès au micro, le navigateur masque les libellés ;
+ * on les numérote alors plutôt que d'afficher des identifiants illisibles. Liste vide si l'API n'existe pas.
+ */
+export async function listOutputDevices(): Promise<OutputDevice[]> {
+  try {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput" && d.deviceId !== "default");
+    return devices.map((d, i) => ({ id: d.deviceId, label: d.label || `#${i + 1}` }));
+  } catch {
+    return [];
+  }
 }
