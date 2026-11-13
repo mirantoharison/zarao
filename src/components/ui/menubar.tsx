@@ -65,7 +65,7 @@ function MenubarContent({
   className,
   align = "start",
   alignOffset = -4,
-  sideOffset = 8,
+  sideOffset = 11,
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.Content>) {
   return (
@@ -76,7 +76,7 @@ function MenubarContent({
         alignOffset={alignOffset}
         sideOffset={sideOffset}
         className={cn(
-          "z-50 min-w-[12rem] origin-(--radix-menubar-content-transform-origin) overflow-hidden rounded-xl border border-border/60 bg-popover/85 p-1.5 text-popover-foreground shadow-2xl backdrop-blur-xl data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          "z-50 min-w-[12rem] origin-(--radix-menubar-content-transform-origin) overflow-hidden rounded-xl rounded-tl-none border border-border/60 bg-popover/85 p-1.5 text-popover-foreground shadow-2xl backdrop-blur-xl data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           className
         )}
         {...props}
@@ -143,12 +143,13 @@ function MenubarRadioItem({
     <MenubarPrimitive.RadioItem
       data-slot="menubar-radio-item"
       className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-xs py-1.5 pr-2 pl-8 text-sm outline-hidden select-none focus:bg-primary/15 focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex cursor-default items-center gap-2 rounded-md py-1.5 pr-8 pl-2 text-sm outline-hidden select-none focus:bg-primary/15 focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
     >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+      {/* Indicateur de sélection à droite (le contenu reste aligné à gauche, comme dans les listes déroulantes). */}
+      <span className="pointer-events-none absolute right-2 flex size-3.5 items-center justify-center">
         <MenubarPrimitive.ItemIndicator>
           <CircleIcon className="size-2 fill-current" />
         </MenubarPrimitive.ItemIndicator>
@@ -226,7 +227,7 @@ function MenubarSubTrigger({
       data-slot="menubar-sub-trigger"
       data-inset={inset}
       className={cn(
-        "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none select-none focus:bg-primary/15 focus:text-foreground data-[inset]:pl-8 data-[state=open]:bg-primary/15 data-[state=open]:text-foreground",
+        "flex cursor-default items-center rounded-md px-2 py-1.5 text-sm outline-none select-none focus:bg-primary/15 focus:text-foreground data-[inset]:pl-8 data-[state=open]:bg-primary/15 data-[state=open]:text-foreground",
         className
       )}
       {...props}
@@ -241,7 +242,10 @@ function MenubarSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof MenubarPrimitive.SubContent>) {
+  // IMPORTANT : dans un Portal. Le menu parent a un flou d'arrière-plan (backdrop-filter), ce qui en fait le repère des éléments `position: fixed`
+  // qu'il contient : sans portail, Radix calcule la position dans la fenêtre mais le sous-menu est décalé de celle du parent (il sortait de l'écran).
   return (
+    <MenubarPrimitive.Portal>
     <MenubarPrimitive.SubContent
       data-slot="menubar-sub-content"
       className={cn(
@@ -250,6 +254,7 @@ function MenubarSubContent({
       )}
       {...props}
     />
+    </MenubarPrimitive.Portal>
   )
 }
 
