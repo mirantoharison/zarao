@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
-import { MessageSquare, ThumbsDown, ThumbsUp, MicVocal, Copy, FastForward, FolderSearch, Gauge, Heart, Keyboard, Maximize, Moon, Music, Pause, PictureInPicture2, Play, Repeat, Repeat1, Rewind, Shuffle, SlidersVertical, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from "lucide-react";
+import { AudioLines, Captions, Loader2, MessageSquare, ThumbsDown, ThumbsUp, MicVocal, Copy, FastForward, FolderSearch, Gauge, Heart, Keyboard, Maximize, Moon, Music, Pause, PictureInPicture2, Play, Repeat, Repeat1, Rewind, Shuffle, SlidersVertical, SkipBack, SkipForward, Square, Volume2, VolumeX, X, ListMusic } from "lucide-react";
+import { AlarmClock, Bookmark, CornerDownRight, Undo2 } from "lucide-react";
+import { BookmarkMarkers } from "@/components/BookmarkMarkers";
+import { useBookmarks } from "@/lib/bookmarks";
 import { useEqualizer } from "@/lib/equalizer";
 import { RainbowRing } from "@/components/RainbowRing";
 import { toggleVideoFullscreen } from "@/components/VideoStage";
@@ -31,6 +34,14 @@ type Props = {
   /** Volet de l'égaliseur (ouvert à gauche) et sa bascule. */
   eqOpen: boolean;
   onToggleEq: () => void;
+  /** Tiroir de la liste de lecture (lecteur local) : bouton affiché seulement si fourni. */
+  listOpen?: boolean;
+  onToggleList?: () => void;
+  /** Boîte « Aller à… » (lecteur local) : bouton, à côté de la boucle A–B et de la minuterie, affiché seulement si fourni. */
+  onGoto?: () => void;
+  /** Signets du média en cours et minuterie libre (lecteur local) : boutons affichés seulement si fournis. */
+  onBookmarks?: () => void;
+  onSleepCustom?: () => void;
   /** Mode en ligne seulement : j'aime / je n'aime pas du média en cours et accès aux commentaires. */
   social?: { data: Social | null; onReact: (kind: Reaction) => void; onOpenComments: () => void };
   onToggleLyrics: () => void;
@@ -40,15 +51,18 @@ type Props = {
  * Barre de lecture partagée entre le lecteur local et la bibliothèque en ligne :
  * infos de la piste, boutons de contrôle, progression, boucle A–B, minuterie, vitesse, volume.
  */
-export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, onShowShortcuts, onOpenVisualizer, lyricsOpen, onToggleLyrics, eqOpen, onToggleEq, social }: Props) {
+export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, onShowShortcuts, onOpenVisualizer, lyricsOpen, onToggleLyrics, eqOpen, onToggleEq, listOpen, onToggleList, onGoto, onBookmarks, onSleepCustom, social }: Props) {
   const { t } = useI18n();
   const [showRemaining, setShowRemaining] = useState(false);
   const eq = useEqualizer();
+  const bookmarks = useBookmarks(p.current?.path ?? null);
   const RepeatIcon = p.repeat === "one" ? Repeat1 : Repeat;
   const isVideo = p.current?.kind === "video";
   const currentIndex = p.items.findIndex((i) => i.id === p.current?.id);
   // "À suivre" ne prédit pas le mode aléatoire : on l'indique plutôt qu'afficher une valeur fausse.
-  const upNext = p.shuffle ? null : (currentIndex >= 0 ? p.items[currentIndex + 1] : p.items[0]) ?? (p.repeat === "all" ? p.items[0] : undefined);
+  // La file « à suivre » prime, même en mode aléatoire : sa prochaine piste est connue.
+  const queuedNext = p.queue.map((id) => p.items.find((i) => i.id === id)).find(Boolean);
+  const upNext = queuedNext ?? (p.shuffle ? null : (currentIndex >= 0 ? p.items[currentIndex + 1] : p.items[0]) ?? (p.repeat === "all" ? p.items[0] : undefined));
   // Durée restante de la playlist : fin de la piste courante + toutes les suivantes.
   const remaining = useMemo(() => {
     if (currentIndex < 0) return 0;
@@ -100,13 +114,18 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
 
       {/* Centre : boutons puis progression */}
       <div className="flex flex-col items-center gap-2">
-        <div className="flex items-center gap-1 py-9">
+        <div className="relative flex items-center gap-1 py-9">
+          {/* Flux converti à la volée (TS, MKV…) : le serveur lance FFmpeg, ce qui prend quelques secondes ; sans ce texte on croirait à un clic sans effet.
+              Posé dans le bas de la zone de boutons (position absolue) pour ne pas décaler la mise en page. */}
+          {p.loading && p.current && p.current.playMode && p.current.playMode !== "direct" && (
+            <span role="status" className="pointer-events-none absolute inset-x-0 bottom-1 animate-pulse text-center text-xs text-muted-foreground">{t("ctl.preparing")}</span>
+          )}
           <Button size="icon" className="size-11 [&_svg]:size-5" variant={p.shuffle ? "secondary" : "ghost"} onClick={p.toggleShuffle} title={t("ctl.shuffle")}><Shuffle /></Button>
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={p.previous} title={t("ctl.previous")}><SkipBack /></Button>
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={() => p.seek(Math.max(0, p.time - SEEK_STEP))} disabled={!p.current} title={t("ctl.rewind", { s: SEEK_STEP })}><Rewind /></Button>
           <div className="relative mx-7 grid place-items-center">
             <RainbowRing mediaRef={p.mediaRef} playing={p.playing} trackId={p.current?.id} path={spectrumSource} />
-            <Button size="icon" className="relative z-10 size-14 rounded-full bg-foreground text-background hover:bg-foreground/90 [&_svg]:size-6" onClick={p.togglePlay} title={p.playing ? t("ctl.pause") : t("ctl.play")}>{p.playing ? <Pause /> : <Play />}</Button>
+            <Button size="icon" className="relative z-10 size-14 rounded-full bg-foreground text-background hover:bg-foreground/90 [&_svg]:size-6" onClick={p.togglePlay} title={p.playing ? t("ctl.pause") : t("ctl.play")} aria-busy={p.loading}>{p.loading && p.current ? <Loader2 className="animate-spin" /> : p.playing ? <Pause /> : <Play />}</Button>
           </div>
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={() => p.seek(Math.min(p.duration || 0, p.time + SEEK_STEP))} disabled={!p.current} title={t("ctl.forward", { s: SEEK_STEP })}><FastForward /></Button>
           <Button size="icon" className="size-11 [&_svg]:size-5" variant="ghost" onClick={() => p.next()} title={t("ctl.next")}><SkipForward /></Button>
@@ -115,7 +134,11 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
         </div>
         <div className="flex w-full items-center gap-2">
           <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{p.time > 0 ? formatTime(p.time) : "0:00"}</span>
-          <Slider className="flex-1" min={0} max={p.duration || 1} step={0.1} value={[Math.min(p.time, p.duration || 1)]} disabled={!p.current} onValueChange={([v]) => p.seek(v)} />
+          <div className="relative flex-1">
+            <Slider className="w-full" min={0} max={p.duration || 1} step={0.1} value={[Math.min(p.time, p.duration || 1)]} disabled={!p.current} onValueChange={([v]) => p.seek(v)} />
+            {/* Signets : petits marque-pages colorés posés sur la barre, chacun à son instant. Un clic y mène. */}
+            <BookmarkMarkers list={bookmarks} duration={p.duration} onSeek={p.seek} />
+          </div>
           <button className="w-12 text-left text-xs tabular-nums text-muted-foreground hover:text-foreground" title={t("ctl.remainingToggle")} onClick={() => setShowRemaining((r) => !r)}>{showRemaining ? `-${formatTime(Math.max(0, p.duration - p.time))}` : formatTime(p.duration)}</button>
         </div>
         <div className="flex items-center gap-1 text-xs">
@@ -126,7 +149,25 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
           <Button size="sm" variant={p.sleepMode === "off" ? "ghost" : "secondary"} className="h-7 px-2" onClick={p.cycleSleep} title={t("ctl.sleepTitle")}>
             <Moon /> {p.sleepMode === "off" ? t("ctl.sleep") : p.sleepMode === "track" ? t("ctl.sleepTrack") : formatTime(p.sleepLeft)}
           </Button>
+          {onSleepCustom && <Button size="icon" variant="ghost" className="size-7" onClick={onSleepCustom} title={t("slp.btn")} aria-label={t("slp.btn")}><AlarmClock /></Button>}
+          {onGoto && <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onGoto} title={`${t("goto.title")} (Ctrl + G)`}><CornerDownRight /> {t("goto.short")}</Button>}
+          <Button size="icon" variant="ghost" className="size-7" disabled={!p.canGoBack} onClick={() => { p.goBack(); }} title={t("back.title")} aria-label={t("back.short")}><Undo2 /></Button>
+          {onBookmarks && <Button size="icon" variant="ghost" className="size-7" disabled={!p.current} onClick={onBookmarks} title={`${t("bm.title")} (Ctrl + B)`} aria-label={t("bm.title")}><Bookmark /></Button>}
           <Button size="sm" variant="ghost" className="h-7 px-2" disabled={!isVideo} onClick={p.pictureInPicture} title={t("ctl.pip")}><PictureInPicture2 /> PiP</Button>
+          {/* Plusieurs pistes audio : un clic passe à la suivante (le serveur relance le flux avec cette piste, à la même position) */}
+          {isVideo && p.audioLangs.length > 1 && (
+            <Button size="sm" variant="ghost" className={cn("h-7 px-2", p.audioTrack > 0 && ACTIVE_BTN)} onClick={() => p.selectAudioTrack((p.audioTrack + 1) % p.audioLangs.length)}
+              title={`${t("aud.title")} : ${p.audioLangs[p.audioTrack]?.toUpperCase() || p.audioTrack + 1} / ${p.audioLangs.length}`}>
+              <AudioLines /> {p.audioLangs[p.audioTrack]?.toUpperCase() || p.audioTrack + 1}
+            </Button>
+          )}
+          {/* Sous-titres trouvés à côté de la vidéo : un clic passe au jeu suivant puis les désactive (touche C) */}
+          {isVideo && p.subtitleTracks.length > 0 && (
+            <Button size="sm" variant="ghost" className={cn("h-7 px-2", p.subtitleIndex >= 0 && ACTIVE_BTN)} onClick={p.cycleSubtitles}
+              title={`${t("sub.title")} (C) : ${p.subtitleIndex >= 0 ? p.subtitleTracks[p.subtitleIndex].label : t("sub.off")}`}>
+              <Captions /> {p.subtitleIndex >= 0 ? p.subtitleTracks[p.subtitleIndex].label : t("sub.title")}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -140,6 +181,7 @@ export function PlayerBar({ p, isFavorite, onToggleFavorite, onReveal, onCopy, o
             <Button size="icon" className={cn("size-9 rounded-full [&_svg]:size-4", eqOpen && ACTIVE_BTN)} variant="ghost" onClick={onToggleEq} title={t("eq.title")}>
               <span className="relative"><SlidersVertical />{eq.enabled && <span className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary" aria-hidden />}</span>
             </Button>
+            {onToggleList && <Button size="icon" className={cn("size-9 rounded-full [&_svg]:size-4", listOpen && ACTIVE_BTN)} variant="ghost" onClick={onToggleList} title={t("list.toggle")} aria-pressed={listOpen}><ListMusic /></Button>}
             <span className="mx-1 h-5 w-px bg-border" />
             <Button size="icon" className="size-9 rounded-full [&_svg]:size-4" variant="ghost" disabled={!p.current} onClick={() => (isVideo ? fullscreen() : onOpenVisualizer())} title={t("fs.open")}><Maximize /></Button>
             <Button size="icon" className={cn("size-9 rounded-full [&_svg]:size-4", lyricsOpen && ACTIVE_BTN)} variant="ghost" onClick={onToggleLyrics} title={t("lyr.toggle")}><MicVocal /></Button>

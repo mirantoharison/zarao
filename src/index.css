@@ -214,6 +214,26 @@ html[data-palette="blanc"] .ambient-blob { opacity: 0.07 !important; }
   body { @apply bg-background text-foreground; }
 }
 
+/* Toast de reprise (VideoStage) : la barre se vide en `--toast-duration`, la durée exacte avant la fermeture automatique. */
+@keyframes toast-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.toast-countdown { transform-origin: left; animation: toast-countdown var(--toast-duration, 15s) linear forwards; }
+/* Barre blanche sur toutes les palettes, sauf « blanc » où elle disparaîtrait : elle y prend la couleur principale (sombre). */
+.toast-countdown-track { background: oklch(1 0 0 / 15%); }
+.toast-countdown { background: oklch(1 0 0); }
+html[data-palette="blanc"] .toast-countdown-track { background: color-mix(in oklab, var(--primary) 15%, transparent); }
+html[data-palette="blanc"] .toast-countdown { background: var(--primary); }
+@media (prefers-reduced-motion: reduce) { .toast-countdown { display: none; } }
+
+/* Paramètres : halo bref sur la ligne ou le groupe ouvert depuis la recherche (fond + liseré intérieur, car les cartes rognent les ombres externes). */
+@keyframes setting-flash {
+  0% { box-shadow: inset 0 0 0 1.5px var(--primary); background-color: color-mix(in oklab, var(--primary) 16%, transparent); }
+  100% { box-shadow: inset 0 0 0 1.5px transparent; background-color: transparent; }
+}
+.setting-flash { animation: setting-flash 1.6s ease-out; }
+
+/* Mini-lecteur : aucune barre de défilement ni rebond de la page (voir LocalPlayer : classe posée sur <html> en mode mini). */
+html.mini-mode, html.mini-mode body { overflow: hidden; overscroll-behavior: none; }
+
 /* Barres de l'indicateur de lecture (PlayingBars) */
 @keyframes eq-bounce {
   0%, 100% { height: 25%; }
@@ -239,3 +259,18 @@ html[data-palette="blanc"] .ambient-blob { opacity: 0.07 !important; }
 .ambient-blob { animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-play-state: paused; transition: opacity 1.2s ease; }
 [data-playing="true"] .ambient-blob { animation-play-state: running; }
 @media (prefers-reduced-motion: reduce) { .ambient-blob { animation: none !important; } }
+
+/* Signets : le marque-page « tombe » sur la barre en rebondissant, avec un léger décalage entre chaque (animationDelay posé en ligne).
+   Les lignes de la boîte « Signets » glissent depuis la gauche. Coupé si l'utilisateur préfère moins d'animations.
+   IMPORTANT : Tailwind 4 pose translate/scale par les propriétés CSS `translate` et `scale`, pas par `transform` : les keyframes
+   (qui animent `transform`) se composent avec le centrage (-translate-x-1/2) et le survol (hover:scale-125) sans les écraser. */
+@keyframes bookmark-drop {
+  0% { opacity: 0; transform: translateY(-16px) scale(0.3) rotate(-14deg); }
+  55% { opacity: 1; transform: translateY(3px) scale(1.2) rotate(5deg); }
+  80% { transform: translateY(-1px) scale(0.95) rotate(-2deg); }
+  100% { opacity: 1; transform: none; }
+}
+.bookmark-drop { animation: bookmark-drop 520ms cubic-bezier(0.34, 1.4, 0.64, 1) backwards; transform-origin: 50% 100%; }
+@keyframes bookmark-row-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+.bookmark-row-in { animation: bookmark-row-in 320ms ease-out backwards; }
+@media (prefers-reduced-motion: reduce) { .bookmark-drop, .bookmark-row-in { animation: none; } }

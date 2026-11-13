@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EyeOff, Gauge, Info, ListMusic, MicVocal, Minimize, Moon, Music, Palette, PanelRight, FastForward, Pause, Play, Repeat, Repeat1, Rewind, Shuffle, SkipBack, SkipForward, Volume2, VolumeX, PictureInPicture2 } from "lucide-react";
 import { SEEK_STEP } from "@/components/PlayerBar";
+import { BookmarkMarkers } from "@/components/BookmarkMarkers";
+import { useBookmarks } from "@/lib/bookmarks";
 import { Slider } from "@/components/ui/slider";
 import { LyricsPanel } from "@/components/LyricsPanel";
 import { PlayingBars } from "@/components/PlayingBars";
@@ -25,6 +27,15 @@ type Props = {
   theme?: { label: string; onToggle: () => void };
 };
 
+type FullscreenUi = { panel: "queue" | "info" | null; showLyrics: boolean; calm: boolean };
+const UI_KEY = "zarao.fullscreen.ui.v1";
+function readUi(): FullscreenUi {
+  try {
+    const v = JSON.parse(localStorage.getItem(UI_KEY) ?? "null") as Partial<FullscreenUi> | null;
+    return { panel: v?.panel === "queue" || v?.panel === "info" ? v.panel : null, showLyrics: v?.showLyrics === true, calm: v?.calm === true };
+  } catch { return { panel: null, showLyrics: false, calm: false }; }
+}
+
 /** Délai sans mouvement de souris avant de masquer les contrôles. */
 const HIDE_AFTER_MS = 3000;
 
@@ -34,14 +45,18 @@ const HIDE_AFTER_MS = 3000;
  */
 export function FullscreenChrome({ p, lyrics, onExit, onBackgroundClick, analysisMissing = false, theme }: Props) {
   const { t } = useI18n();
+  const bookmarks = useBookmarks(p.current?.path ?? null);
   const hideTimer = useRef<number | undefined>(undefined);
   const [controlsVisible, setControlsVisible] = useState(true);
-  // Volet de droite exclusif : file de lecture ou détails du morceau.
-  const [panel, setPanel] = useState<"queue" | "info" | null>(null);
-  // Paroles : fermées par défaut, ouvertes au besoin depuis le rail latéral.
-  const [showLyrics, setShowLyrics] = useState(false);
-  // Mode épuré : masque tous les volets pour ne garder que le fond.
-  const [calm, setCalm] = useState(false);
+  // Volets (droite exclusif : file ou détails), paroles, mode épuré.
+  // IMPORTANT : état mémorisé. Le composant est démonté à la sortie du plein écran ; sans mémoire, chaque nouvelle entrée repartait
+  // de zéro (volets refermés, paroles masquées, mode épuré annulé).
+  const [ui, setUi] = useState<FullscreenUi>(readUi);
+  useEffect(() => { try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch { /* non bloquant */ } }, [ui]);
+  const { panel, showLyrics, calm } = ui;
+  const setPanel = (v: FullscreenUi["panel"] | ((p: FullscreenUi["panel"]) => FullscreenUi["panel"])) => setUi((u) => ({ ...u, panel: typeof v === "function" ? v(u.panel) : v }));
+  const setShowLyrics = (v: boolean | ((b: boolean) => boolean)) => setUi((u) => ({ ...u, showLyrics: typeof v === "function" ? v(u.showLyrics) : v }));
+  const setCalm = (v: boolean | ((b: boolean) => boolean)) => setUi((u) => ({ ...u, calm: typeof v === "function" ? v(u.calm) : v }));
 
   // IMPORTANT : ref lue par le minuteur (créé une fois) ; un état dans sa fermeture serait périmé.
   // Un volet ouvert (paroles, file, détails) est en cours de consultation : on ne masque pas les contrôles.
@@ -84,7 +99,8 @@ export function FullscreenChrome({ p, lyrics, onExit, onBackgroundClick, analysi
       </header>
 
       {/* Paroles synchronisées : trois lignes (précédente, en cours, suivante), façon karaoké */}
-      {showLyrics && lyrics?.synced && (
+      {/* Trois lignes façon karaoké : seulement quand le volet est masqué (mode épuré ou contrôles cachés), pour que les paroles restent visibles. */}
+      {showLyrics && lyrics?.synced && (calm || !controlsVisible) && (
         <div className="pointer-events-none absolute inset-x-0 bottom-36 space-y-1 px-10 text-center drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)]">
           {[active - 1, active, active + 1].map((i, k) => {
             const text = i >= 0 && i < lyrics.lines.length ? lyrics.lines[i].text : "";
@@ -95,8 +111,8 @@ export function FullscreenChrome({ p, lyrics, onExit, onBackgroundClick, analysi
 
       {/* Paroles en texte brut : volet à gauche */}
       {/* IMPORTANT : toujours monté (pas de rendu conditionnel) pour que la sortie s'anime aussi, pas seulement l'entrée. */}
-      <div className={cn("absolute bottom-36 left-24 top-24 flex w-[30rem] flex-col overflow-hidden rounded-xl bg-white/10 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl backdrop-saturate-150 transition-all duration-300 ease-out", showLyrics && !calm && controlsVisible && (!lyrics || !lyrics.synced) ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-8 opacity-0")} aria-hidden={!showLyrics}>
-        <LyricsPanel className="min-h-0 flex-1" lyrics={lyrics} loading={false} hasTrack={Boolean(cur)} time={p.time} onClose={() => setShowLyrics(false)} />
+      <div className={cn("absolute bottom-36 left-24 top-24 flex w-[30rem] flex-col overflow-hidden rounded-xl bg-white/10 text-white shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl backdrop-saturate-150 transition-all duration-300 ease-out", showLyrics && !calm && controlsVisible ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-8 opacity-0")} aria-hidden={!showLyrics}>
+        <LyricsPanel className="min-h-0 flex-1" lyrics={lyrics} loading={false} hasTrack={Boolean(cur)} time={p.time} onSeek={p.seek} onClose={() => setShowLyrics(false)} />
       </div>
 
       {/* Volet de liste de lecture */}
@@ -161,7 +177,11 @@ export function FullscreenChrome({ p, lyrics, onExit, onBackgroundClick, analysi
         <footer className={cn("absolute inset-x-0 bottom-0 space-y-2 p-5", fade)}>
           <div className="flex items-center gap-3">
             <span className="w-12 text-right text-sm tabular-nums text-white/80">{p.time > 0 ? formatTime(p.time) : "0:00"}</span>
-            <Slider className="flex-1" min={0} max={p.duration || 1} step={0.1} value={[Math.min(p.time, p.duration || 1)]} disabled={!cur} onValueChange={([v]) => p.seek(v)} />
+            <div className="relative flex-1">
+              <Slider className="w-full" min={0} max={p.duration || 1} step={0.1} value={[Math.min(p.time, p.duration || 1)]} disabled={!cur} onValueChange={([v]) => p.seek(v)} />
+              {/* Signets du média en cours, comme sur la barre du lecteur ; un peu plus grands : tout est plus grand en plein écran. */}
+              <BookmarkMarkers list={bookmarks} duration={p.duration} onSeek={p.seek} iconClassName="size-5" />
+            </div>
             <span className="w-12 text-sm tabular-nums text-white/80">{formatTime(p.duration)}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
