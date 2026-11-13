@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { loadPcm, spectrumAt } from "@/lib/spectrum";
+import { loadPcm, smoothLevel, spectrumAt } from "@/lib/spectrum";
+import { getAudioSettings } from "@/lib/settings";
 import { ringBarColor, useVisualizerTheme } from "@/lib/visualizerTheme";
 
 type Props = {
@@ -21,7 +22,7 @@ const MAX_BAR = 18;
 
 // Un seul AudioContext pour toute l'app : le navigateur plafonne leur nombre.
 let sharedCtx: AudioContext | null = null;
-const getCtx = () => (sharedCtx ??= new AudioContext());
+export const getCtx = () => (sharedCtx ??= new AudioContext({ latencyHint: getAudioSettings().latencyHint }));
 
 /**
  * Spectrogramme circulaire aux couleurs de l'arc-en-ciel, dessiné autour du bouton lecture.
@@ -68,7 +69,7 @@ export function RainbowRing({ mediaRef, playing, trackId, path, innerRadius: inn
         const ctx = getCtx();
         sourceRef.current?.disconnect();
         const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
+        analyser.fftSize = getAudioSettings().fftSize;
         analyser.smoothingTimeConstant = 0.75;
         const source = ctx.createMediaStreamSource(stream);
         source.connect(analyser); // volontairement pas relié à ctx.destination
@@ -135,7 +136,7 @@ export function RainbowRing({ mediaRef, playing, trackId, path, innerRadius: inn
           target = sum / (to - from) / 255;
         }
         // Montée rapide, descente lente : un rendu plus lisible qu'un affichage brut.
-        levels[i] += (target - levels[i]) * (target > levels[i] ? 0.5 : 0.12);
+        levels[i] = smoothLevel(levels[i], target);
         energy += levels[i];
 
         const angle = (i / BAR_COUNT) * Math.PI * 2 - Math.PI / 2; // départ en haut, sens horaire

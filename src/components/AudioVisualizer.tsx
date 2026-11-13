@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { paletteTone } from "@/lib/palette";
-import { ANALYSIS_RATE, loadPcm, spectrumAt } from "@/lib/spectrum";
+import { ANALYSIS_RATE, loadPcm, peekPcm, smoothLevel, spectrumAt } from "@/lib/spectrum";
 
 export type AudioVisualizerTheme = "zarao" | "classic" | "rainbow";
 
@@ -34,6 +34,22 @@ let ZARAO_HUE = 34;
 let ZARAO_SAT = 1;
 
 /**
+ * État du visualiseur conservé hors du composant.
+ * IMPORTANT : le plein écran est démonté à la sortie ; sans ça, chaque entrée repartait de zéro (spectre à plat, particules
+ * disparues, disque ramené à l'angle 0, pochette qui réapparaît après coup). Ici, tout est repris là où on l'avait laissé.
+ */
+const persisted = {
+  source: undefined as string | null | undefined,
+  levels: new Float32Array(BAR_COUNT),
+  peaks: new Float32Array(BAR_COUNT),
+  motes: [] as Mote[],
+  bass: 0, beat: 0, bassAvg: 0, angle: 0,
+};
+/** Pochettes déjà préparées (recadrées et réduites), par URL ; "logo" pour la pochette par défaut. */
+const coverCache = new Map<string, HTMLCanvasElement>();
+const coverKey = (jacket?: string) => jacket || "logo";
+
+/**
  * Visualiseur plein écran moderne (canvas 2D, sans bibliothèque) :
  * couronne de barres capsules (spectre sur 360°) avec crêtes qui retombent, halo qui respire sur les basses,
  * onde fine intérieure, pochette en disque et poussière lumineuse. Même contrat que l'ancien `Visualizer`.
@@ -45,26 +61,39 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pcmRef = useRef<Float32Array | null>(null);
-  const imageRef = useRef<HTMLCanvasElement | null>(null);
-  const motesRef = useRef<Mote[]>([]);
-  const levelsRef = useRef(new Float32Array(BAR_COUNT));
-  const peaksRef = useRef(new Float32Array(BAR_COUNT));
+  // Pochette et spectre : repris du cache s'ils existent déjà, pour un affichage immédiat à la réouverture.
+  const imageRef = useRef<HTMLCanvasElement | null>(coverCache.get(coverKey(jacket)) ?? null);
+  const motesRef = useRef<Mote[]>(persisted.motes);
+  const levelsRef = useRef(persisted.levels);
+  const peaksRef = useRef(persisted.peaks);
   const rawRef = useRef(new Float32Array(BAR_COUNT));
-  const bassRef = useRef(0);
-  const beatRef = useRef(0); // impulsion "heartbeat" : saute à 1 sur une attaque de basses, retombe vite
-  const bassAvgRef = useRef(0); // moyenne lente des basses, sert de seuil de détection
-  const angleRef = useRef(0);
+  const bassRef = useRef(persisted.bass);
+  const beatRef = useRef(persisted.beat); // impulsion "heartbeat" : saute à 1 sur une attaque de basses, retombe vite
+  const bassAvgRef = useRef(persisted.bassAvg); // moyenne lente des basses, sert de seuil de détection
+  const angleRef = useRef(persisted.angle);
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   // Redessin forcé : pochette, spectre ou taille qui arrivent pendant la pause doivent apparaître.
   const [tick, forceDraw] = useState(0);
 
+  // À la sortie : on range les valeurs lissées pour la prochaine entrée.
+  useEffect(() => () => {
+    persisted.bass = bassRef.current; persisted.beat = beatRef.current; persisted.bassAvg = bassAvgRef.current; persisted.angle = angleRef.current;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    pcmRef.current = null;
-    motesRef.current = [];
-    levelsRef.current.fill(0);
-    peaksRef.current.fill(0);
+    // Réinitialisation seulement si le morceau a changé : une simple réouverture du plein écran garde le spectre et les particules.
+    if (persisted.source !== source) {
+      persisted.source = source;
+      motesRef.current.length = 0;
+      levelsRef.current.fill(0);
+      peaksRef.current.fill(0);
+      bassRef.current = 0; beatRef.current = 0; bassAvgRef.current = 0;
+    }
+    const cached = source ? peekPcm(source) : undefined;
+    pcmRef.current = cached ?? null;
     if (!source) { onAnalysis?.(false); return; }
+    if (cached !== undefined) onAnalysis?.(cached !== null); // déjà décodé : pas d'attente
     void loadPcm(source).then((pcm) => {
       if (cancelled) return;
       pcmRef.current = pcm;
@@ -75,6 +104,9 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
   }, [source, onAnalysis]);
 
   useEffect(() => {
+    const key = coverKey(jacket);
+    const hit = coverCache.get(key);
+    if (hit) { imageRef.current = hit; forceDraw((n) => n + 1); return; }
     imageRef.current = null;
     // Sans pochette, le logo Zarao sert de pochette par défaut (posé sur fond sombre, avec une marge pour rester dans le disque).
     const isLogo = !jacket;
@@ -96,6 +128,8 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
         c.width = c.height = Math.min(COVER_CACHE_PX, side);
         g?.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, c.width, c.height);
       }
+      if (coverCache.size >= 8) coverCache.delete(coverCache.keys().next().value as string);
+      coverCache.set(key, c);
       imageRef.current = c;
       forceDraw((n) => n + 1);
     };
@@ -151,7 +185,7 @@ export function AudioVisualizer({ mediaRef, playing, source, jacket, theme, clas
       if (live) spectrumAt(pcm, time, raw); else raw.fill(0);
       let bass = 0;
       for (let i = 0; i < BAR_COUNT; i++) {
-        levels[i] += (raw[i] - levels[i]) * (raw[i] > levels[i] ? 0.5 : 0.12);
+        levels[i] = smoothLevel(levels[i], raw[i]);
         peaks[i] = Math.max(levels[i], peaks[i] - 0.012 * dt);
         if (i < BASS_BARS) bass += levels[i];
       }

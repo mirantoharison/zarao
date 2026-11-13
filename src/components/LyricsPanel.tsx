@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import { activeLine, structureLyrics, type Lyrics } from "@/lib/lyrics";
 import { cn } from "@/lib/utils";
+import { centerInScroller } from "@/lib/scroll";
 
 type Props = {
   lyrics: Lyrics | null;
@@ -69,7 +70,9 @@ export function LyricsPanel({ lyrics, loading, hasTrack, time, onSeek, onEdit, o
   // La ligne active reste centrée, sauf si l'utilisateur est en train de lire ailleurs.
   useEffect(() => {
     if (active < 0 || Date.now() - lastManual.current < MANUAL_SCROLL_PAUSE_MS) return;
-    scrollRef.current?.querySelector(`[data-line="${active}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const scroller = scrollRef.current;
+    const line = scroller?.querySelector(`[data-line="${active}"]`);
+    if (scroller && line) centerInScroller(scroller, line, "y");
   }, [active]);
 
   const markManual = () => { lastManual.current = Date.now(); };

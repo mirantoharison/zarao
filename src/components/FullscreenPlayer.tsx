@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FullscreenChrome } from "@/components/FullscreenChrome";
 import { AudioVisualizer as Visualizer } from "@/components/AudioVisualizer";
 import { useVisualizerTheme } from "@/lib/visualizerTheme";
+import { ensureDocumentFullscreen, isVideoFullscreen, leaveDocumentFullscreen } from "@/lib/fullscreen";
 import type { usePlayer } from "@/hooks/usePlayer";
 import type { Lyrics } from "@/lib/lyrics";
 import { useI18n } from "@/i18n";
@@ -23,9 +24,8 @@ export function FullscreenPlayer({ p, open, onClose, lyrics }: Props) {
   // Ouverture : plein écran du navigateur sur la couche (fermée avec Échap, ce qui déclenche fullscreenchange).
   useEffect(() => {
     if (!open) return;
-    const root = rootRef.current;
     // IMPORTANT : si le plein écran est refusé (webview, absence de geste utilisateur), la couche reste simplement affichée par-dessus l'app.
-    void root?.requestFullscreen?.().catch(() => undefined);
+    ensureDocumentFullscreen();
     const onFs = () => { if (!document.fullscreenElement) closeRef.current(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeRef.current(); };
     document.addEventListener("fullscreenchange", onFs);
@@ -33,7 +33,8 @@ export function FullscreenPlayer({ p, open, onClose, lyrics }: Props) {
     return () => {
       document.removeEventListener("fullscreenchange", onFs);
       window.removeEventListener("keydown", onKey);
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      // IMPORTANT : on ne quitte le plein écran que si la couche vidéo ne prend pas le relais (bascule audio -> vidéo).
+      if (!isVideoFullscreen()) leaveDocumentFullscreen();
     };
   }, [open]);
 
