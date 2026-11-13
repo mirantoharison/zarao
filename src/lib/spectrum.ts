@@ -5,11 +5,11 @@
  * depuis le <video>. Le protocole asset de Tauri est cross-origin : capturer ou router l'audio de
  * l'élément y est silencieux ou bloqué. Ici, aucune dépendance au CORS.
  */
-import { readFile } from "@tauri-apps/plugin-fs";
+import { readFile, stat } from "@tauri-apps/plugin-fs";
+import { getAudioSettings } from "@/lib/settings";
 
 /** Fréquence d'échantillonnage du décodage : mono 16 kHz suffit (spectre jusqu'à 8 kHz) et divise la mémoire par ~6. */
 export const ANALYSIS_RATE = 16000;
-export const FFT_SIZE = 512;
 /** Au-delà, on n'analyse pas : lire et décoder un fichier énorme pour un effet visuel coûterait trop cher. */
 const MAX_FILE_BYTES = 120 * 1024 * 1024;
 
@@ -28,6 +28,14 @@ export async function decodeMono(bytes: ArrayBuffer): Promise<Float32Array | nul
   }
 }
 
+/**
+ * PCM déjà en cache pour ce chemin, sans rien charger : undefined = jamais chargé, null = chargé mais indisponible.
+ * Sert à réafficher le spectre tout de suite quand un composant est remonté (réentrée en plein écran).
+ */
+export function peekPcm(path: string): Float32Array | null | undefined {
+  return cache.get(path);
+}
+
 /** Charge (et met en cache) le PCM d'un fichier local. null = indisponible → l'anneau reste plat. */
 export async function loadPcm(path: string): Promise<Float32Array | null> {
   if (cache.has(path)) return cache.get(path)!;
@@ -39,6 +47,9 @@ export async function loadPcm(path: string): Promise<Float32Array | null> {
       const buf = await res.arrayBuffer();
       if (buf.byteLength <= MAX_FILE_BYTES) pcm = await decodeMono(buf);
     } else {
+      // IMPORTANT : la taille se vérifie AVANT de lire. `readFile` charge tout le fichier en mémoire côté Rust : sur une vidéo de plusieurs Go,
+      // l'allocation échoue et fait planter toute l'application (code 0xe0000008), sans passer par ce try/catch.
+      if ((await stat(path)).size > MAX_FILE_BYTES) { cache.set(path, null); return null; }
       const bytes = await readFile(path);
       if (bytes.byteLength <= MAX_FILE_BYTES) pcm = await decodeMono(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
     }
@@ -53,9 +64,26 @@ export async function loadPcm(path: string): Promise<Float32Array | null> {
 }
 
 // --- FFT radix-2 (itérative) ---
-const HANN = Float32Array.from({ length: FFT_SIZE }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (FFT_SIZE - 1)));
-const re = new Float32Array(FFT_SIZE);
-const im = new Float32Array(FFT_SIZE);
+// IMPORTANT : la taille vient des Paramètres (Audio). Les tables sont reconstruites seulement quand elle change, jamais à chaque image.
+let FFT_SIZE = 0;
+let HANN = new Float32Array(0);
+let re = new Float32Array(0);
+let im = new Float32Array(0);
+
+function ensureTables(): void {
+  const size = getAudioSettings().fftSize;
+  if (size === FFT_SIZE) return;
+  FFT_SIZE = size;
+  HANN = Float32Array.from({ length: size }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (size - 1)));
+  re = new Float32Array(size);
+  im = new Float32Array(size);
+}
+
+/** Lissage d'une barre : montée (`attack`) et descente (`release`) réglables, appliquées une fois par image. */
+export function smoothLevel(level: number, target: number): number {
+  const { attack, release } = getAudioSettings();
+  return level + (target - level) * (target > level ? attack : release);
+}
 
 function fft(): void {
   const n = FFT_SIZE;
@@ -89,6 +117,7 @@ function fft(): void {
  * Les barres suivent une répartition exponentielle : plus de résolution dans les graves.
  */
 export function spectrumAt(pcm: Float32Array, time: number, out: Float32Array): void {
+  ensureTables();
   const start = Math.floor(time * ANALYSIS_RATE) - FFT_SIZE / 2;
   for (let i = 0; i < FFT_SIZE; i++) {
     const idx = start + i;

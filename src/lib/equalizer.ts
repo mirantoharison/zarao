@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { getAudioSettings, subscribeAudioSettings } from "@/lib/settings";
 
 /**
  * Égaliseur 10 bandes (Web Audio) branché sur l'élément média unique du lecteur.
@@ -82,7 +83,8 @@ let filters: BiquadFilterNode[] = [];
 const sources = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
 
 function build(): AudioContext {
-  const c = new AudioContext();
+  // latencyHint : lu à la création seulement (un AudioContext ne le change plus ensuite) → effet au prochain lancement.
+  const c = new AudioContext({ latencyHint: getAudioSettings().latencyHint });
   filters = EQ_FREQUENCIES.map((freq, i) => {
     const f = c.createBiquadFilter();
     // Étagères aux extrémités : les bandes extrêmes agissent sur tout le spectre qui les dépasse.
@@ -91,13 +93,56 @@ function build(): AudioContext {
     f.Q.value = EQ_Q;
     return f;
   });
-  filters.forEach((f, i) => f.connect(filters[i + 1] ?? c.destination));
+  filters.forEach((f, i) => { if (filters[i + 1]) f.connect(filters[i + 1]); });
+  // Limiteur : compresseur très raide juste sous 0 dBFS. Il est branché ou contourné par `applyOutput` (pas de gain résiduel quand il est coupé).
+  limiter = c.createDynamicsCompressor();
+  limiter.threshold.value = -1;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.1;
+  limiter.connect(c.destination);
   // Point d'entrée unique : les sources s'y branchent, et le transpositeur vient s'intercaler après coup.
   pre = c.createGain();
+  pre.gain.value = replayGain;
   pre.connect(filters[0]);
   ctx = c;
+  applyOutput();
   return c;
 }
+
+let replayGain = 1;
+/**
+ * Gain linéaire appliqué à l'entrée du graphe (ReplayGain). Sans effet audible tant que l'audio ne passe pas par Web Audio.
+ * IMPORTANT : mémorisé même si le graphe n'existe pas encore ; `build` le reprend.
+ */
+export function setEqualizerGain(linear: number): void {
+  replayGain = Math.max(0, Math.min(8, linear));
+  if (ctx && pre) pre.gain.setTargetAtTime(replayGain, ctx.currentTime, 0.02);
+}
+
+let limiter: DynamicsCompressorNode | null = null;
+let limiterOn: boolean | null = null;
+let appliedSink: string | null = null;
+
+/** Applique les réglages de sortie (limiteur, périphérique) au graphe existant ; sans effet tant qu'il n'est pas créé. */
+function applyOutput(): void {
+  if (!ctx || !limiter) return;
+  const { limiter: wantLimiter, sinkId } = getAudioSettings();
+  const last = filters[filters.length - 1];
+  if (limiterOn !== wantLimiter) {
+    last.disconnect();
+    last.connect(wantLimiter ? limiter : ctx.destination);
+    limiterOn = wantLimiter;
+  }
+  // AudioContext.setSinkId (Chromium 110+) : absent ailleurs, auquel cas la sortie reste celle du système.
+  const setSink = (ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> }).setSinkId;
+  if (setSink && appliedSink !== sinkId) {
+    appliedSink = sinkId;
+    setSink.call(ctx, sinkId).catch(() => { appliedSink = null; /* périphérique débranché : on garde la sortie actuelle */ });
+  }
+}
+subscribeAudioSettings(applyOutput);
 
 function applyGains() {
   if (!ctx) return;
