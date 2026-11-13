@@ -1,4 +1,4 @@
-import { open as openFile } from "@tauri-apps/plugin-fs";
+import { open as openFile, SeekMode } from "@tauri-apps/plugin-fs";
 import { parseBlob } from "music-metadata";
 
 /** Tags éditables (mêmes clés que le serveur : cf. TAG_KEYS dans server/index.mjs). */
@@ -60,34 +60,58 @@ export async function readFileTags(file: File): Promise<{ tags: TagValues; jacke
   }
 }
 
+/** Conteneurs dont l'index (atome `moov`) peut se trouver en FIN de fichier : le début seul ne suffit pas à les lire. */
+const MP4_LIKE = /\.(mp4|m4v|m4a|mov|3gp)$/i;
+
+/**
+ * Faux `Blob` paresseux adossé à un descripteur de fichier : music-metadata (BlobTokenizer) n'appelle que `size`, `type` et
+ * `slice(a, b).arrayBuffer()`, donc seules les plages réellement lues sont chargées depuis le disque.
+ * IMPORTANT : un MP4 non « faststart » (enregistrements, téléchargements, exports) range son `moov` après les données ; avec les seuls
+ * premiers Mo (ancienne méthode) l'analyse échouait. Ici l'analyseur peut sauter l'`mdat` (seek) et lire le `moov` final.
+ */
+function lazyBlob(handle: Awaited<ReturnType<typeof openFile>>, size: number): Blob {
+  const lazy = {
+    size, type: "",
+    slice: (start = 0, end = size) => ({
+      arrayBuffer: async () => {
+        const from = Math.max(0, start), len = Math.max(0, Math.min(end, size) - from);
+        const buf = new Uint8Array(len);
+        await handle.seek(from, SeekMode.Start);
+        let got = 0;
+        while (got < len) {
+          const n = await handle.read(got === 0 ? buf : buf.subarray(got));
+          if (!n) break;
+          got += n;
+        }
+        return buf.buffer.slice(0, got);
+      },
+    }),
+  };
+  return lazy as unknown as Blob;
+}
+
 /** Lit tags, pochette et informations d'un fichier local (plugin fs + music-metadata). */
 export async function readLocalTags(path: string): Promise<LocalTags> {
   const handle = await openFile(path, { read: true });
-  let stat: Awaited<ReturnType<typeof handle.stat>>;
-  let blob: Blob;
   try {
-    stat = await handle.stat();
-    const buf = new Uint8Array(READ_BYTES);
-    const n = (await handle.read(buf)) ?? 0;
-    blob = new Blob([buf.slice(0, n)]);
+    const stat = await handle.stat();
+    const meta = await parseBlob(lazyBlob(handle, stat.size), { duration: false, skipPostHeaders: !MP4_LIKE.test(path) });
+    const c = meta.common;
+    const picture = c.picture?.[0];
+    return {
+      tags: {
+        title: c.title ?? "", artist: c.artist ?? "", album: c.album ?? "", album_artist: c.albumartist ?? "", composer: first(c.composer),
+        genre: first(c.genre), date: c.year ? String(c.year) : c.date ?? "", track: pair(c.track), disc: pair(c.disk),
+        publisher: first(c.label), copyright: c.copyright ?? "",
+      },
+      info: {
+        name: path.split(/[\\/]/).pop() ?? path, path, size: stat.size, format: [meta.format.container, meta.format.codec].filter(Boolean).join(" / "),
+        duration: meta.format.duration ?? 0, encoder: c.encodedby ?? c.encodersettings ?? "",
+        created: stat.birthtime, modified: stat.mtime, accessed: stat.atime,
+      },
+      jacket: picture ? bytesToDataUrl(picture.data, picture.format) : "",
+    };
   } finally {
     await handle.close();
   }
-
-  const meta = await parseBlob(blob, { duration: false, skipPostHeaders: true });
-  const c = meta.common;
-  const picture = c.picture?.[0];
-  return {
-    tags: {
-      title: c.title ?? "", artist: c.artist ?? "", album: c.album ?? "", album_artist: c.albumartist ?? "", composer: first(c.composer),
-      genre: first(c.genre), date: c.year ? String(c.year) : c.date ?? "", track: pair(c.track), disc: pair(c.disk),
-      publisher: first(c.label), copyright: c.copyright ?? "",
-    },
-    info: {
-      name: path.split(/[\\/]/).pop() ?? path, path, size: stat.size, format: [meta.format.container, meta.format.codec].filter(Boolean).join(" / "),
-      duration: meta.format.duration ?? 0, encoder: c.encodedby ?? c.encodersettings ?? "",
-      created: stat.birthtime, modified: stat.mtime, accessed: stat.atime,
-    },
-    jacket: picture ? bytesToDataUrl(picture.data, picture.format) : "",
-  };
 }
