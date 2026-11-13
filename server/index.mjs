@@ -21,10 +21,19 @@ import Database from "better-sqlite3";
 import { parseFile } from "music-metadata";
 import { writeMp3Lyrics } from "./id3-lyrics.mjs";
 import { availableVideoEncoders, buildPlayArgs, buildTagArgs, parseEncoderList } from "./ffmpeg-args.mjs";
+import { SETTING_DEFS, audioLangMatches, parseSetting, sanitizeExtraArgs, validateSettingInput } from "./settings-schema.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_PORT = Number(process.env.ZARAO_PORT) || 4000;
-const DATA_DIR = process.env.ZARAO_DATA_DIR || path.join(os.homedir(), "zarao-data");
+// IMPORTANT : ZARAO_ROLE sépare les deux serveurs. "local" = fichiers du disque, ffmpeg, réglages (lancé par Tauri, 127.0.0.1) ;
+// "online" = comptes, catalogue, playlists, social (déployable sur un vrai serveur) ; "all" (défaut) = les deux dans un seul process.
+const ROLE = ["local", "online"].includes(process.env.ZARAO_ROLE ?? "") ? process.env.ZARAO_ROLE : "all";
+const DEFAULT_PORT = ROLE === "online" ? 4001 : 4000;
+// ZARAO_PORT (environnement) l'emporte sur le réglage des Paramètres, qui l'emporte sur le port par défaut.
+const ENV_PORT = Number(process.env.ZARAO_PORT) || 0;
+// 127.0.0.1 par défaut. Un serveur en ligne derrière un reverse proxy (HTTPS) passe ZARAO_HOST=0.0.0.0 (ou l'IP privée).
+const HOST = process.env.ZARAO_HOST || "127.0.0.1";
+// Données séparées par rôle : un serveur local et un serveur en ligne sur la même machine ne doivent pas partager zarao.db.
+const DATA_DIR = process.env.ZARAO_DATA_DIR || path.join(os.homedir(), ROLE === "online" ? "zarao-online-data" : "zarao-data");
 const MEDIA_DIR = path.join(DATA_DIR, "media");
 const TMP_DIR = path.join(DATA_DIR, "tmp");
 // Doit couvrir les extensions vidéo proposées par l'interface : une extension absente ici classait le fichier en "audio".
@@ -36,6 +45,19 @@ const getFfmpegPath = () => getSetting("ffmpeg") || process.env.ZARAO_FFMPEG || 
 
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 fs.mkdirSync(TMP_DIR, { recursive: true });
+
+// ---- Journal ----
+// IMPORTANT : fichier texte dans le dossier de données (ouvrable depuis les Paramètres). Au-delà de 1 Mo on ne garde que la fin :
+// un journal ne doit jamais grossir sans limite sur la machine de l'utilisateur.
+const LOG_FILE = path.join(DATA_DIR, "zarao-server.log");
+const LOG_MAX_BYTES = 1024 * 1024;
+try { if (fs.statSync(LOG_FILE).size > LOG_MAX_BYTES) fs.writeFileSync(LOG_FILE, fs.readFileSync(LOG_FILE).subarray(-LOG_MAX_BYTES / 4)); } catch { /* pas encore de journal */ }
+/** Écrit dans la console ET dans le fichier ; une erreur d'écriture du journal ne doit jamais gêner le serveur. */
+function logLine(level, ...parts) {
+	const text = parts.map((p) => (p instanceof Error ? p.stack ?? p.message : String(p))).join(" ");
+	(level === "error" ? console.error : console.log)(text);
+	try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${level}] ${text}\n`); } catch { /* disque plein, fichier verrouillé… */ }
+}
 
 const db = new Database(path.join(DATA_DIR, "zarao.db"));
 db.pragma("journal_mode = WAL");
@@ -129,6 +151,21 @@ const settingSet = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) O
 function getSetting(key) {
 	return settingGet.get(key)?.value ?? "";
 }
+/** Réglage typé (nombre, booléen…) ; le défaut du schéma s'applique tant que rien n'est enregistré. */
+const cfg = (key) => parseSetting(key, getSetting(key));
+/** Port d'écoute : lu une fois au démarrage (le changer dans les Paramètres demande de relancer l'application). */
+const CONFIGURED_PORT = cfg("port");
+const SERVER_PORT = ENV_PORT || CONFIGURED_PORT || DEFAULT_PORT;
+let activePort = SERVER_PORT;
+/** Réglages d'encodage passés à buildPlayArgs (cf. DEFAULT_PLAY_OPTS). */
+function playOpts() {
+	const extra = sanitizeExtraArgs(getSetting("extraArgs"));
+	return {
+		x264Preset: cfg("x264Preset"), x264Crf: cfg("x264Crf"), videoBitrate: cfg("videoBitrate"), audioBitrate: cfg("audioBitrate"),
+		audioChannels: cfg("audioChannels"), gop: cfg("gop"), threads: cfg("threads"), hwaccel: cfg("hwaccel"), deinterlace: cfg("deinterlace"),
+		audioTrack: cfg("audioTrack"), logLevel: cfg("logLevel"), extraArgs: extra.ok ? extra.args : [],
+	};
+}
 
 /** Reconstitue l'objet média plat attendu par le front (`_id` conservé pour compat). */
 const hydrate = (row) => row && { ...JSON.parse(row.data), _id: row.id, id: row.id, userid: row.userid, savedate: row.savedate, path: row.path, isVideo: Boolean(row.is_video) };
@@ -144,10 +181,10 @@ const TRACK_AUDIO = 2;
 /** Repli pour les conteneurs que music-metadata ne lit pas (AVI, MPG, TS) : analyse de la sortie de `ffmpeg -i`. */
 function probeWithFfmpeg(file) {
 	return new Promise((resolve) => {
-		const empty = { duration: 0, hasVideo: false, container: "", video: "", audio: "", via: "none", pixfmt: "" };
+		const empty = { duration: 0, hasVideo: false, container: "", video: "", audio: "", via: "none", pixfmt: "", audioLangs: [] };
 		let err = "";
 		const proc = spawn(getFfmpegPath(), ["-hide_banner", "-i", file], { stdio: ["ignore", "ignore", "pipe"] });
-		const timer = setTimeout(() => proc.kill("SIGKILL"), 15_000);
+		const timer = setTimeout(() => proc.kill("SIGKILL"), cfg("probeTimeout") * 1000);
 		proc.stderr.on("data", (d) => { err = (err + d).slice(-8000); });
 		// Sans fichier de sortie, ffmpeg se termine en erreur : c'est normal, seule la sortie d'information compte.
 		proc.on("error", () => { clearTimeout(timer); resolve(empty); });
@@ -159,10 +196,12 @@ function probeWithFfmpeg(file) {
 			const videoLine = /Stream #\d+:\d+[^\n]*: Video: [^\n]*/.exec(err)?.[0] ?? "";
 			const pixfmt = /\b(yuv[a-z0-9]+|nv\d+[a-z0-9]*|p01\d[a-z0-9]*|gbr[a-z0-9]+|gray[a-z0-9]*)\b/.exec(videoLine.replace(/^[^,]*,/, ""))?.[1] ?? "";
 			const audio = /Stream #\d+:\d+[^:]*: Audio: ([\w.]+)/.exec(err);
+			// Langue de chaque piste audio, dans l'ordre : « Stream #0:2(fra): Audio: … » (vide si la piste n'est pas étiquetée).
+			const audioLangs = [...err.matchAll(/Stream #\d+:\d+(?:\[[^\]]*\])?(?:\(([^)]*)\))?[^\n]*?: Audio:/g)].map((m) => (m[1] ?? "").toLowerCase());
 			resolve({
 				duration: d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0, hasVideo: Boolean(video),
 				container: /Input #0, ([^,]+)/.exec(err)?.[1] ?? "", video: video?.[1] ?? "", audio: audio?.[1] ?? "", via: "ffmpeg",
-				pixfmt,
+				pixfmt, audioLangs,
 			});
 		});
 	});
@@ -192,6 +231,34 @@ async function probeMedia(file) {
 		return probeWithFfmpeg(file);
 	}
 }
+/**
+ * Index de la piste audio à servir pour une vidéo : la langue préférée si le fichier la propose, sinon l'index réglé.
+ * IMPORTANT : lire les langues demande un `ffmpeg -i` ; le résultat est mémorisé par fichier (chemin + date + taille).
+ */
+const audioLangCache = new Map();
+/** Langues des pistes audio du fichier, dans l'ordre (tableau vide si ffmpeg est absent ou le fichier illisible). */
+async function audioLangsOf(file) {
+	if (!(await ffmpegAvailable())) return [];
+	try {
+		const st = fs.statSync(file);
+		const key = `${file}|${st.mtimeMs}|${st.size}`;
+		let langs = audioLangCache.get(key);
+		if (!langs) {
+			langs = (await probeWithFfmpeg(file)).audioLangs ?? [];
+			if (audioLangCache.size > 500) audioLangCache.clear();
+			audioLangCache.set(key, langs);
+		}
+		return langs;
+	} catch { return []; }
+}
+async function resolveAudioTrack(file) {
+	const lang = cfg("audioLang");
+	const fallback = cfg("audioTrack");
+	if (!lang) return fallback;
+	const found = (await audioLangsOf(file)).findIndex((l) => audioLangMatches(lang, l));
+	return found >= 0 ? found : fallback;
+}
+
 // ---- Décision de lecture : direct, remux ou transcodage partiel ----
 // Noms de codecs normalisés : music-metadata ("MPEG4/ISO/AVC", "MPEG 1 Layer 3") et ffmpeg ("h264", "mp3") ne s'écrivent pas pareil.
 function canonVideo(name) {
@@ -231,27 +298,37 @@ const NATIVE_EXT = new Set(["mp4", "m4v", "m4a", "webm", "ogg", "oga", "ogv", "o
 const MP4_VIDEO = new Set(["h264", "vp9", "av1"]);
 const MP4_AUDIO = new Set(["aac", "mp3", "opus", "flac"]);
 
-// La disponibilité de ffmpeg est mémorisée 30 s : elle est demandée à chaque lecture.
+// La disponibilité de ffmpeg est mémorisée : 30 s si présent, 2 s seulement si absent.
+// IMPORTANT : au tout premier lancement, le 1er `ffmpeg -version` est lent (analyse antivirus de l'exe) et peut dépasser le délai.
+// Mémoriser cet échec 30 s faisait basculer toute lecture en "direct" (= média non pris en charge) jusqu'à expiration.
+// Les appels simultanés partagent aussi la même sonde au lieu de lancer plusieurs ffmpeg froids.
 let ffmpegState = { at: 0, ok: false, path: "" };
+let ffmpegInflight = null;
 async function ffmpegAvailable() {
 	const path_ = getFfmpegPath();
-	if (ffmpegState.path === path_ && Date.now() - ffmpegState.at < 30_000) return ffmpegState.ok;
-	const r = await probeBinary(path_, "ffmpeg");
-	ffmpegState = { at: Date.now(), ok: r.ok, path: path_ };
-	return r.ok;
+	if (ffmpegState.path === path_ && Date.now() - ffmpegState.at < (ffmpegState.ok ? 30_000 : 2_000)) return ffmpegState.ok;
+	if (ffmpegInflight?.path === path_) return ffmpegInflight.promise;
+	const promise = probeBinary(path_, "ffmpeg", ffmpegState.at === 0 ? 25_000 : 8000).then((r) => {
+		ffmpegState = { at: Date.now(), ok: r.ok, path: path_ };
+		return r.ok;
+	}).finally(() => { ffmpegInflight = null; });
+	ffmpegInflight = { path: path_, promise };
+	return promise;
 }
 
 // ---- Capacités d'ffmpeg : quels encodeurs H.264 sont réellement utilisables ----
 // Le serveur doit marcher avec un ffmpeg minimal et libre (sans libx264) : on lit ce que le binaire possède.
 let encoderCache = { path: "", names: new Set() };
+let encoderInflight = null;
 async function ffmpegEncoderNames() {
 	const bin = getFfmpegPath();
 	if (encoderCache.path === bin && encoderCache.names.size > 0) return encoderCache.names;
-	const names = await new Promise((resolve) => {
-		execFile(bin, ["-hide_banner", "-encoders"], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => resolve(err ? new Set() : parseEncoderList(stdout)));
-	});
-	encoderCache = { path: bin, names };
-	return names;
+	if (encoderInflight?.bin === bin) return encoderInflight.promise;
+	const promise = new Promise((resolve) => {
+		execFile(bin, ["-hide_banner", "-encoders"], { timeout: 20_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => resolve(err ? new Set() : parseEncoderList(stdout)));
+	}).then((names) => { encoderCache = { path: bin, names }; return names; }).finally(() => { encoderInflight = null; });
+	encoderInflight = { bin, promise };
+	return promise;
 }
 
 // Un encodeur listé peut échouer à l'exécution (NVENC sans pilote compatible, AMF sans DLL) : après un échec on le met de côté 10 min.
@@ -263,16 +340,34 @@ async function h264Candidates() {
 	// qui se comporte mal, ou pour tester le repli.
 	const forced = (process.env.ZARAO_VIDEO_ENCODERS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 	if (forced.length) list = forced.map((name) => list.find((e) => e.name === name)).filter(Boolean);
-	return list.filter((e) => (deadEncoders.get(e.name) ?? 0) < now);
+	list = list.filter((e) => (deadEncoders.get(e.name) ?? 0) < now);
+	// Encodeur préféré des Paramètres : essayé en premier, les autres restent en repli s'il échoue. Absent ou écarté : sans effet.
+	const preferred = getSetting("encoder");
+	const first = preferred && list.find((e) => e.name === preferred);
+	return first ? [first, ...list.filter((e) => e !== first)] : list;
 }
 
 /**
  * Lance ffmpeg et écrit sa sortie dans la réponse. Résout avec `started` : vrai dès qu'un octet a été envoyé.
  * Tant que `started` est faux, l'appelant peut réessayer avec un autre encodeur sans que le client ait rien reçu.
  */
+const activeFfmpeg = new Set(); // suivis pour être tués à l'arrêt du serveur (cf. shutdown)
+const PRIORITIES = { belowNormal: os.constants.priority.PRIORITY_BELOW_NORMAL, low: os.constants.priority.PRIORITY_LOW };
 function streamFfmpeg(args, res) {
 	return new Promise((resolve) => {
+		// Nombre maximal de flux simultanés : au-delà, le plus ancien est interrompu (c'est presque toujours une lecture abandonnée).
+		const max = cfg("maxStreams");
+		while (max > 0 && activeFfmpeg.size >= max) {
+			const oldest = activeFfmpeg.values().next().value;
+			activeFfmpeg.delete(oldest);
+			try { oldest.kill("SIGKILL"); } catch { /* déjà terminé */ }
+		}
 		const proc = spawn(getFfmpegPath(), args, { stdio: ["ignore", "pipe", "pipe"] });
+		// Priorité basse : la lecture ne doit pas écraser le reste du poste. Sans effet (silencieux) si le système refuse.
+		const priority = PRIORITIES[cfg("priority")];
+		if (priority !== undefined && proc.pid) { try { os.setPriority(proc.pid, priority); } catch { /* droits insuffisants */ } }
+		activeFfmpeg.add(proc);
+		proc.on("close", () => activeFfmpeg.delete(proc));
 		let started = false, stderr = "", done = false;
 		const finish = () => { if (!done) { done = true; resolve({ started, stderr: stderr.trim() }); } };
 		proc.stderr.on("data", (d) => { stderr = (stderr + d).slice(-1500); });
@@ -316,10 +411,15 @@ async function planPlayback(row) {
 
 /** Décision pure à partir des codecs sondés : partagée par les médias du serveur et les fichiers locaux (/local/*). */
 async function decidePlayback(file, isVideo, codecs) {
+	await warmPromise;
 	const ext = path.extname(file).slice(1).toLowerCase();
 	const v = canonVideo(codecs.video), a = canonAudio(codecs.audio);
 	// Une résolution ou un ratio réglés ne peuvent s'appliquer qu'en réencodant la vidéo.
-	const forceEncode = isVideo && Boolean(v) && Boolean(getSetting("videoSize") || getSetting("videoAspect"));
+	// La politique « toujours réencoder » s'applique de la même façon (cohérence des flux, ou pour écarter un lecteur capricieux).
+	const forceEncode = isVideo && Boolean(v) && Boolean(getSetting("videoSize") || getSetting("videoAspect") || cfg("playPolicy") === "encode");
+	// Une autre piste audio que la première ne peut être servie que par ffmpeg (le fichier brut joue toujours la piste par défaut).
+	const audioTrack = isVideo && v ? await resolveAudioTrack(file) : 0;
+	const forceStream = isVideo && Boolean(v) && audioTrack > 0;
 	const nativeContainer = NATIVE_EXT.has(ext) && !/matroska/i.test(codecs.container ?? "");
 	// La webview ne décode que le H.264 4:2:0 8 bits ; 10 bits, 4:2:2 et 4:4:4 doivent être réencodés.
 	const badPix = v === "h264" && Boolean(codecs.pixfmt) && !/^yuvj?420p$/.test(codecs.pixfmt);
@@ -327,19 +427,20 @@ async function decidePlayback(file, isVideo, codecs) {
 	const audioNative = !a || NATIVE_AUDIO.has(a);
 
 	let plan;
-	if (!forceEncode && nativeContainer && videoNative && audioNative) plan = { mode: "direct", reason: "compatible" };
+	if (!forceEncode && !forceStream && nativeContainer && videoNative && audioNative) plan = { mode: "direct", reason: "compatible" };
 	else if (!isVideo) plan = { mode: "transcode", video: null, audio: "mp3", reason: `audio:${a || ext}` };
 	else if (isVideo && !v && !a) plan = { mode: "direct", reason: "unknown" }; // sonde impossible : on tente la lecture directe
 	else {
 		const videoCopy = !forceEncode && Boolean(v) && MP4_VIDEO.has(v) && !badPix;
-		const audioCopy = !a || MP4_AUDIO.has(a);
-		const why = forceEncode ? "settings" : badPix ? `video:${v}-${codecs.pixfmt}` : !videoCopy ? `video:${v}` : !audioCopy ? `audio:${a}` : `container:${ext}`;
+		// Le codec sondé est celui de la 1re piste : pour une autre piste on réencode en AAC, seul résultat garanti lisible.
+		const audioCopy = (!a || MP4_AUDIO.has(a)) && audioTrack === 0;
+		const why = forceEncode || forceStream ? "settings" : badPix ? `video:${v}-${codecs.pixfmt}` : !videoCopy ? `video:${v}` : !audioCopy ? `audio:${a}` : `container:${ext}`;
 		plan = videoCopy && audioCopy ? { mode: "remux", video: "copy", audio: "copy", reason: why } : { mode: "transcode", video: videoCopy ? "copy" : "encode", audio: audioCopy ? "copy" : "encode", reason: why };
 	}
 	if (plan.mode !== "direct" && !(await ffmpegAvailable())) return { mode: "direct", reason: "no-ffmpeg" };
 	// Réencoder la vidéo demande un encodeur H.264 : sans lui, mieux vaut tenter le fichier brut que de produire une erreur.
 	if (plan.video === "encode" && (await h264Candidates()).length === 0) return { mode: "direct", reason: "no-h264-encoder" };
-	return { ...plan, sourceAudio: a };
+	return { ...plan, sourceAudio: a, audioTrack };
 }
 
 const formatDuration = (sec) => {
@@ -369,7 +470,19 @@ const avatarUpload = multer({ storage: multer.memoryStorage(), limits: { fileSiz
 // Les erreurs async d'Express 4 ne sont pas capturées toutes seules.
 const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// `ready` : le préchauffage (cf. warmUp) est terminé. `ok` suffit pour savoir que le serveur répond.
+let serverReady = false;
+// Résolue quand le préchauffage est fini : decidePlayback l'attend pour ne jamais conclure "pas de ffmpeg" pendant le démarrage à froid.
+let warmPromise = Promise.resolve();
+app.get("/health", (_req, res) => res.json({ ok: true, ready: serverReady, role: ROLE }));
+
+// Routes qui lisent/écrivent la machine de l'utilisateur : réservées au serveur local. Le reste appartient au serveur en ligne.
+// IMPORTANT : un serveur en ligne ne doit jamais exposer /local, /settings (chemin de ffmpeg exécuté) ni /tags (écriture disque).
+const LOCAL_ROUTES = /^\/(local|settings|tags)(\/|$)/;
+app.use((req, res, next) => {
+	if (ROLE === "all" || (ROLE === "local") === LOCAL_ROUTES.test(req.path)) return next();
+	res.sendStatus(404);
+});
 
 // ---- Comptes ----
 app.post("/connect/account", h(async (req, res) => {
@@ -380,7 +493,8 @@ app.post("/connect/account", h(async (req, res) => {
 }));
 
 /** Fiche publique d'un utilisateur : jamais le hash du mot de passe. */
-const publicUser = (row) => ({ _id: row.id, username: row.username, usermail: row.usermail, ...JSON.parse(row.data) });
+// IMPORTANT : `resume` (positions de lecture, cf. /account/resume) reste côté serveur : la session du client ne doit pas l'embarquer.
+const publicUser = (row) => { const { resume: _resume, ...data } = JSON.parse(row.data); return { _id: row.id, username: row.username, usermail: row.usermail, ...data }; };
 
 const MAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[\w.-]{3,32}$/;
@@ -441,6 +555,30 @@ app.put("/account/password", h(async (req, res) => {
 // ---- Profil ----
 const userSetData = db.prepare("UPDATE users SET data = ? WHERE id = ?");
 const clip = (v, max) => String(v ?? "").trim().slice(0, max);
+
+// ---- Reprise de lecture synchronisée ----
+// Position des vidéos en ligne (clé "online:<id>" → { t, at }) rangée dans la fiche du compte : on la retrouve d'un appareil à l'autre.
+// `t: 0` est une « pierre tombale » (reprise effacée) : sans elle, une suppression serait annulée par la fusion avec les autres appareils.
+// Les chemins de fichiers locaux ne sont jamais synchronisés (propres à chaque machine).
+const RESUME_MAX = 200;
+app.get("/account/resume", (req, res) => {
+	const row = stmt.userById.get(String(req.query.id ?? ""));
+	if (!row) return res.json({ found: false });
+	res.json({ found: true, entries: JSON.parse(row.data).resume ?? {} });
+});
+app.put("/account/resume", h(async (req, res) => {
+	const row = stmt.userById.get(String(req.body?.id ?? ""));
+	if (!row) return res.json({ saved: false });
+	const data = JSON.parse(row.data);
+	const merged = { ...(data.resume ?? {}) };
+	for (const [key, e] of Object.entries(req.body?.entries ?? {})) {
+		if (!key.startsWith("online:") || key.length > 200 || !e || !Number.isFinite(e.t) || !Number.isFinite(e.at)) continue;
+		if (!merged[key] || merged[key].at < e.at) merged[key] = { t: Math.max(0, Math.floor(e.t)), at: Math.floor(e.at) };
+	}
+	data.resume = Object.fromEntries(Object.entries(merged).sort((a, b) => b[1].at - a[1].at).slice(0, RESUME_MAX));
+	userSetData.run(JSON.stringify(data), row.id);
+	res.json({ saved: true, entries: data.resume });
+}));
 
 /** Met à jour la fiche (nom, prénom, âge, bio, lieu, newsletter). Le nom d'utilisateur et l'e-mail ne changent pas : ils servent à se connecter. */
 app.put("/account/profile", h(async (req, res) => {
@@ -652,14 +790,14 @@ app.get("/oauth/:provider/callback", h(async (req, res) => {
 
 // ---- Réglages ----
 /** Lance `<binaire> -version` ; résout avec la 1re ligne si c'est bien ffmpeg. */
-function probeBinary(file, expectedName) {
+function probeBinary(file, expectedName, timeout = 8000) {
 	return new Promise((resolve) => {
 		// IMPORTANT : le nom du fichier doit être ffmpeg. Les réglages sont exécutés ensuite par le serveur :
 		// on refuse d'enregistrer n'importe quel exécutable.
 		const base = path.basename(file).toLowerCase().replace(/\.exe$/, "");
 		if (base !== expectedName) return resolve({ ok: false, error: "name" });
 		if (path.isAbsolute(file) && !fs.existsSync(file)) return resolve({ ok: false, error: "missing" });
-		execFile(file, ["-version"], { timeout: 8000 }, (err, stdout) => {
+		execFile(file, ["-version"], { timeout }, (err, stdout) => {
 			const first = String(stdout ?? "").split("\n")[0]?.trim() ?? "";
 			if (err || !first.toLowerCase().startsWith(`${expectedName} version`)) return resolve({ ok: false, error: err ? "run" : "notffmpeg" });
 			resolve({ ok: true, version: first });
@@ -683,11 +821,11 @@ function detectBinary(name) {
 	return "";
 }
 
-const SIZE_RE = /^(\d{3,4}|\d{3,4}x\d{3,4})?$/;
-const ASPECT_RE = /^(\d{1,2}:\d{1,2})?$/;
+/** Tous les réglages, typés, avec leurs défauts (le client n'a rien à deviner). */
+const readSettings = () => ({ ...Object.fromEntries(Object.keys(SETTING_DEFS).map((k) => [k, cfg(k)])), dataDir: DATA_DIR, logFile: LOG_FILE, activePort, portLocked: ENV_PORT > 0 });
 
 app.get("/settings", (_req, res) => {
-	res.json({ ffmpeg: getSetting("ffmpeg"), videoSize: getSetting("videoSize"), videoAspect: getSetting("videoAspect"), dataDir: DATA_DIR });
+	res.json(readSettings());
 });
 
 /** Ce que le ffmpeg configuré sait faire pour l'application (affiché dans les Paramètres). */
@@ -709,17 +847,45 @@ app.post("/settings/detect", (_req, res) => {
 
 app.put("/settings", h(async (req, res) => {
 	const body = req.body ?? {};
-	const next = {
-		ffmpeg: String(body.ffmpeg ?? "").trim(),
-		videoSize: String(body.videoSize ?? "").trim(), videoAspect: String(body.videoAspect ?? "").trim(),
-	};
+	// Seules les clés envoyées sont modifiées : un client plus ancien ne réinitialise pas les réglages qu'il ne connaît pas.
+	const next = {};
+	for (const key of Object.keys(SETTING_DEFS)) {
+		if (!(key in body)) continue;
+		const r = validateSettingInput(key, body[key]);
+		if (!r.ok) return res.json({ saved: false, field: key, error: "format" });
+		next[key] = r.value;
+	}
 	// Un chemin vide est permis (retour au PATH) ; sinon il doit pointer vers le bon binaire.
 	if (next.ffmpeg) { const r = await probeBinary(next.ffmpeg, "ffmpeg"); if (!r.ok) return res.json({ saved: false, field: "ffmpeg", error: r.error }); }
-	if (!SIZE_RE.test(next.videoSize)) return res.json({ saved: false, field: "videoSize", error: "format" });
-	if (!ASPECT_RE.test(next.videoAspect)) return res.json({ saved: false, field: "videoAspect", error: "format" });
 	db.transaction(() => { for (const [k, v] of Object.entries(next)) settingSet.run(k, v); })();
+	// Un nouveau chemin ffmpeg ou un nouvel encodeur préféré ne doit pas être masqué par l'état mémorisé de l'ancien.
+	if ("ffmpeg" in next) { ffmpegState = { at: 0, ok: false, path: "" }; encoderCache = { path: "", names: new Set() }; }
 	res.json({ saved: true });
 }));
+
+/**
+ * Vide ce qui peut l'être sans risque : fichiers temporaires d'au moins 10 minutes (un envoi en cours n'est pas touché),
+ * sondes mémorisées, état de ffmpeg et encodeurs écartés après un échec (ils seront réessayés).
+ */
+app.post("/settings/clear-cache", (_req, res) => {
+	let removed = 0, bytes = 0;
+	const limit = Date.now() - 10 * 60_000;
+	try {
+		for (const f of fs.readdirSync(TMP_DIR)) {
+			const full = path.join(TMP_DIR, f);
+			const st = fs.statSync(full);
+			if (st.mtimeMs > limit) continue;
+			bytes += st.size; removed++;
+			fs.rmSync(full, { recursive: true, force: true });
+		}
+	} catch { /* dossier absent ou fichier verrouillé : on rend compte de ce qui a été fait */ }
+	localProbeCache.clear();
+	audioLangCache.clear();
+	deadEncoders.clear();
+	ffmpegState = { at: 0, ok: false, path: "" };
+	encoderCache = { path: "", names: new Set() };
+	res.json({ removed, bytes });
+});
 
 // ---- Métadonnées ----
 /**
@@ -802,13 +968,13 @@ app.post("/tags/write", h(async (req, res) => {
 
 	const tmp = path.join(dir, `.${path.basename(file, ext)}.zarao-tmp${ext}`);
 	const isMp3 = /\.mp3$/i.test(file);
-	const args = buildTagArgs({ file, tmp, coverFile, jacket, isVideo, isMp3, id3v1, tags: { ...cleanTags(tags), ...(lyricsText !== undefined && !isMp3 ? { lyrics: lyricsText } : {}) } });
+	const args = buildTagArgs({ file, tmp, coverFile, jacket, isVideo, isMp3, id3v1, id3v2: cfg("id3v2"), tags: { ...cleanTags(tags), ...(lyricsText !== undefined && !isMp3 ? { lyrics: lyricsText } : {}) } });
 
 	const result = await new Promise((resolve) => {
 		const proc = spawn(getFfmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
 		let err = "";
 		proc.stderr.on("data", (d) => { err = (err + d).slice(-600); });
-		const timer = setTimeout(() => proc.kill("SIGKILL"), 120_000);
+		const timer = setTimeout(() => proc.kill("SIGKILL"), cfg("tagTimeout") * 1000);
 		proc.on("error", () => { clearTimeout(timer); resolve({ ok: false, error: "ffmpeg" }); });
 		proc.on("close", (code) => { clearTimeout(timer); resolve(code === 0 ? { ok: true } : { ok: false, error: "failed", detail: err.trim() }); });
 	});
@@ -831,6 +997,8 @@ app.post("/tags/write", h(async (req, res) => {
 	}
 
 	try {
+		// Sauvegarde facultative : copie de l'original à côté (« fichier.mp3.bak ») AVANT de le remplacer.
+		if (cfg("tagBackup")) fs.copyFileSync(file, `${file}.bak`);
 		// Remplacement sur le même volume : l'original n'est jamais laissé à moitié écrit.
 		fs.renameSync(tmp, finalPath);
 		if (finalPath !== file) fs.unlinkSync(file);
@@ -1153,15 +1321,16 @@ async function servePlayback(res, file, isVideo, plan, start) {
 	if (isVideo && video === "copy" && start > 0 && candidates.length > 0) video = "encode";
 	if (isVideo && video === "encode" && candidates.length === 0) return res.status(501).json({ error: "no-h264-encoder" });
 
-	const base = { file, start, isVideo, video, audio: plan.audio ?? "encode", sourceAudio: plan.sourceAudio, size: getSetting("videoSize"), aspect: getSetting("videoAspect") };
+	const base = { file, start, isVideo, video, audio: plan.audio ?? "encode", sourceAudio: plan.sourceAudio, size: getSetting("videoSize"), aspect: getSetting("videoAspect"), opts: { ...playOpts(), audioTrack: plan.audioTrack ?? cfg("audioTrack") } };
 	res.set("Cache-Control", "no-store");
 	// Encodeurs essayés à la suite tant que rien n'est parti vers le client.
 	for (const encoder of video === "encode" ? candidates : [null]) {
 		const { args, mime } = buildPlayArgs({ ...base, encoder });
 		res.type(mime);
+		if (cfg("logLevel") === "info") logLine("info", `[zarao-server] lecture ${plan.mode} (${plan.reason}) : ${getFfmpegPath()} ${args.join(" ")}`);
 		const r = await streamFfmpeg(args, res);
 		if (r.started || res.destroyed) return;
-		console.error(`[zarao-server] ffmpeg (${encoder?.name ?? "copie"}) : ${r.stderr}`);
+		logLine("error", `[zarao-server] ffmpeg (${encoder?.name ?? "copie"}) : ${r.stderr}`);
 		if (encoder) deadEncoders.set(encoder.name, Date.now() + 10 * 60_000);
 	}
 	if (!res.headersSent) res.status(500).end();
@@ -1201,12 +1370,21 @@ app.get("/local/probe", h(async (req, res) => {
 	const c = checkLocalFile(req);
 	if (!c.file) return res.sendStatus(c.status);
 	const { probe, isVideo, plan } = await localPlan(c.file, c.st);
-	res.json({ playMode: plan.mode, playReason: plan.reason, duration: probe.duration || 0, isVideo });
+	// `audioLangs` : une entrée par piste audio d'une vidéo (code de langue, "" si inconnu) ; sert au choix de la piste dans le lecteur.
+	res.json({ playMode: plan.mode, playReason: plan.reason, duration: probe.duration || 0, isVideo, audioLangs: isVideo ? await audioLangsOf(c.file) : [] });
 }));
 app.get("/local/play", h(async (req, res) => {
 	const c = checkLocalFile(req);
 	if (!c.file) return res.sendStatus(c.status);
-	const { isVideo, plan } = await localPlan(c.file, c.st);
+	const { probe, isVideo, plan: base } = await localPlan(c.file, c.st);
+	let plan = base;
+	// `audio=N` : piste audio choisie dans le lecteur (l'emporte sur la langue préférée et l'index des Paramètres). Une autre piste que la
+	// première ne peut être servie que par ffmpeg : l'audio est réencodé en AAC ; la vidéo reste copiée si elle est en H.264, sinon réencodée.
+	if (isVideo && req.query.audio !== undefined && (await ffmpegAvailable())) {
+		const track = Math.max(0, Math.min(15, parseInt(req.query.audio, 10) || 0));
+		const copyVideo = base.mode === "direct" ? canonVideo(probe.video) === "h264" && /^yuvj?420p$/.test(probe.pixfmt ?? "yuv420p") : base.video === "copy";
+		plan = { ...base, mode: "transcode", video: copyVideo ? "copy" : "encode", audio: "encode", audioTrack: track, reason: "audio-track" };
+	}
 	await servePlayback(res, c.file, isVideo, plan, Math.max(0, parseFloat(req.query.time) || 0));
 }));
 
@@ -1224,12 +1402,54 @@ app.get("/media/download", (req, res) => {
 
 app.use((err, _req, res, _next) => {
 	if (err.code === "LIMIT_FILE_SIZE") return res.status(413).json({ registered: false, error: "avatarTooBig" });
-	console.error(err);
+	logLine("error", err);
 	res.status(500).json({ error: err.message });
 });
 
-const server = app.listen(SERVER_PORT, "127.0.0.1", () => console.log(`[zarao-server] http://127.0.0.1:${SERVER_PORT}`));
-const shutdown = () => { server.close(); db.close(); process.exit(0); };
+const server = app.listen(SERVER_PORT, HOST, () => logLine("info", `[zarao-server] ${ROLE} http://${HOST}:${activePort}`));
+// IMPORTANT : un port choisi dans les Paramètres peut être pris par un autre programme. Plutôt que de laisser l'application sans serveur
+// (et sans moyen de corriger le réglage), on revient au port par défaut et on efface le réglage ; le client fait de même (cf. isServerUp).
+server.on("error", (err) => {
+	if (err.code === "EADDRINUSE" && !ENV_PORT && CONFIGURED_PORT && activePort !== DEFAULT_PORT) {
+		logLine("error", `[zarao-server] port ${CONFIGURED_PORT} occupé : retour au port par défaut ${DEFAULT_PORT}`);
+		settingSet.run("port", "0");
+		activePort = DEFAULT_PORT;
+		server.listen(DEFAULT_PORT, HOST);
+		return;
+	}
+	logLine("error", err);
+	process.exit(4);
+});
+// ---- Préchauffage ----
+// IMPORTANT : on déclenche en arrière-plan, juste après l'écoute, ce qui est coûteux à froid (1er lancement de ffmpeg.exe,
+// liste des encodeurs, chargement de music-metadata) pour que la première lecture de l'utilisateur ne le paie pas.
+async function warmUp() {
+	try {
+		if (await ffmpegAvailable()) await ffmpegEncoderNames();
+		await parseFile(path.join(__dirname, "package.json")).catch(() => {}); // charge les parseurs de music-metadata
+	}
+	finally { serverReady = true; }
+}
+warmPromise = warmUp();
+// ---- Arrêt propre ----
+// IMPORTANT : sur Windows, tuer node n'arrête pas ses ffmpeg enfants. On les tue ici, on vide tmp et on ferme la base.
+let shuttingDown = false;
+const shutdown = () => {
+	if (shuttingDown) return;
+	shuttingDown = true;
+	for (const proc of activeFfmpeg) { try { proc.kill("SIGKILL"); } catch { /* déjà terminé */ } }
+	try { server.closeAllConnections?.(); server.close(); } catch { /* déjà fermé */ }
+	try { for (const f of fs.readdirSync(TMP_DIR)) fs.rmSync(path.join(TMP_DIR, f), { recursive: true, force: true }); } catch { /* best effort */ }
+	try { db.pragma("wal_checkpoint(TRUNCATE)"); db.close(); } catch { /* best effort */ }
+	process.exit(0);
+};
+// Tauri garde le tuyau stdin ouvert tant qu'il vit : sa fermeture (fermeture normale OU plantage de l'app) = demande d'arrêt.
+if (process.env.ZARAO_WATCH_STDIN === "1") {
+	process.stdin.resume();
+	process.stdin.on("end", shutdown);
+	process.stdin.on("close", shutdown);
+}
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-process.on("uncaughtException", (err) => { console.error(err); process.exit(4); });
+process.on("SIGBREAK", shutdown);
+process.on("uncaughtException", (err) => { logLine("error", err); process.exit(4); });
