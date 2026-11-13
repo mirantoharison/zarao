@@ -8,9 +8,15 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "dev:local": "vite --mode localonly",
+    "build:local": "tsc -b && vite build --mode localonly",
+    "tauri:dev:local": "tauri dev --features local-edition --config src-tauri/tauri.local.conf.json",
+    "tauri:build:local": "tauri build --features local-edition --config src-tauri/tauri.local.conf.json",
     "tauri": "tauri",
     "server": "node server/index.mjs",
-    "bundle-node": "node tools/bundle-node.mjs"
+    "bundle-node": "node tools/bundle-node.mjs",
+    "server:local": "node server/index.mjs",
+    "server:online": "node server/online.mjs"
   },
   "dependencies": {
     "@fontsource-variable/outfit": "^5.3.0",

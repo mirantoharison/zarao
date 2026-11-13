@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zarao Local",
+  "identifier": "mg.zarao.local",
+  "build": {
+    "beforeDevCommand": "npm run bundle-node && npm run dev:local",
+    "beforeBuildCommand": "npm run bundle-node && npm run build:local"
+  }
+}
